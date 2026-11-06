@@ -1,0 +1,27 @@
+{{define "content"}}
+<h3>❓ Справка</h3>
+<div class="card">
+  <h4>Paylater Monitor — единая панель мониторинга</h4>
+  <p>Go-порт панели мониторинга инфраструктуры Paylater (ServerCore, Graylog, Zeebe/Camunda 8, Vault, MS Teams).</p>
+  
+  <h4>Разделы</h4>
+  <ul>
+    <li><b>Dashboard</b> — сводка состояния серверов и контейнеров.</li>
+    <li><b>Серверы</b> — список ВМ из ServerCore (Nova API) с метриками CPU/RAM/Disk.</li>
+    <li><b>Контейнеры</b> — Docker-контейнеры на всех серверах (docker ps + stats).</li>
+    <li><b>Graylog</b> — состояние кластера и поиск логов (PROD/TEST).</li>
+    <li><b>Zeebe</b> — метрики Camunda 8 через Prometheus (SSH-туннель).</li>
+    <li><b>Процессы</b> — активные/зависшие инстансы и инциденты Zeebe (Operate API).</li>
+    <li><b>Vault</b> — каталог секретов, чтение/запись KV v1/v2.</li>
+    <li><b>AI-диагностика</b> — автоматическое обнаружение проблем и ИИ-диагноз (ChatGPT/Koda).</li>
+    <li><b>Эфемерный доступ</b> — временные ключи через Vault Ephemeral.</li>
+    <li><b>Управление ВМ</b> — создание/удаление/старт/стоп виртуальных машин.</li>
+  </ul>
+
+  <h4>Конфигурация</h4>
+  <p>Все настройки в <code>config.yaml</code>. Фоновый мониторинг каждые 5 минут, отчёты в MS Teams каждый час.</p>
+
+  <h4>Деплой</h4>
+  <p>Windows. Сборка: <code>go build -o paylater-mon.exe ./cmd/server</code>. Запуск: <code>paylater-mon.exe -config config.yaml</code>.</p>
+</div>
+{{end}}

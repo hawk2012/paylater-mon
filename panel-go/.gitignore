@@ -1,0 +1,17 @@
+# Бинарники
+*.exe
+*.exe~
+paylater-mon
+paylater-mon.exe
+
+# Локальные секреты (не пушить!)
+config.local.yaml
+config.secret.yaml
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

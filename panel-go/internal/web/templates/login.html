@@ -1,0 +1,18 @@
+{{define "content"}}
+<div class="login-page">
+  <div class="login-card">
+    <h2>📊 Paylater Monitor</h2>
+    <h3>Вход в систему</h3>
+    {{if .Error}}
+    <div class="alert alert-warning">{{.Error}}</div>
+    {{end}}
+    <form method="post" action="/login" class="form">
+      <label>Логин:</label>
+      <input type="text" name="username" class="input" required autofocus>
+      <label>Пароль:</label>
+      <input type="password" name="password" class="input" required>
+      <button type="submit" class="btn btn-primary">Войти</button>
+    </form>
+  </div>
+</div>
+{{end}}

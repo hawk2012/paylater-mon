@@ -1,0 +1,33 @@
+{{define "content"}}
+<h3>🌐 Docker Networks (топология)</h3>
+<p><a href="/containers" class="btn btn-sm btn-primary">← Назад к контейнерам</a></p>
+
+{{range .Hosts}}
+<h4>{{.Server}}</h4>
+{{if .Networks}}
+<table class="table">
+  <thead><tr><th>Network</th><th>Driver</th><th>Scope</th><th>Контейнеры</th></tr></thead>
+  <tbody>
+  {{range .Networks}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.Driver}}</td>
+      <td>{{.Scope}}</td>
+      <td>
+        {{if .Containers}}
+          {{range .Containers}}<span class="badge badge-info">{{.}}</span> {{end}}
+        {{else}}
+          <span class="muted">—</span>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">Нет сетей.</p>
+{{end}}
+{{else}}
+<div class="alert alert-info">Нет доступных серверов.</div>
+{{end}}
+{{end}}

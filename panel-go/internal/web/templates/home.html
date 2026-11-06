@@ -1,0 +1,99 @@
+{{define "content"}}
+{{if not .MonitoringEnabled}}
+<div class="alert alert-warning">
+  ⚠️ Мониторинг серверов не подключен. Проверьте IAM-учётные данные ServerCore в config.yaml.
+</div>
+{{end}}
+
+<div class="grid grid-4">
+  <div class="card stat-card">
+    <div class="stat-value">{{.ServerCount}}</div>
+    <div class="stat-label">Серверов</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value">{{.TotalContainers}}</div>
+    <div class="stat-label">Контейнеров</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value{{if gt .DownContainers 0}} text-danger{{end}}">{{.DownContainers}}</div>
+    <div class="stat-label">Упавших контейнеров</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value{{if gt (len .Problems) 0}} text-danger{{end}}">{{len .Problems}}</div>
+    <div class="stat-label">Проблем</div>
+  </div>
+</div>
+
+{{if gt (len .Problems) 0}}
+<h3>🔴 Активные проблемы</h3>
+<table class="table">
+  <thead>
+    <tr><th>Сервер</th><th>Тип</th><th>Серьёзность</th><th>Описание</th></tr>
+  </thead>
+  <tbody>
+  {{range .Problems}}
+    <tr class="{{if eq .Severity "critical"}}row-critical{{else}}row-warning{{end}}">
+      <td>{{.ServerName}}</td>
+      <td>{{.Type}}</td>
+      <td><span class="badge badge-{{if eq .Severity "critical"}}danger{{else}}warning{{end}}">{{.Severity}}</span></td>
+      <td>{{.Title}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-success">✅ Активных проблем не обнаружено.</div>
+{{end}}
+
+<h3>🖥 Серверы</h3>
+<table class="table">
+  <thead>
+    <tr><th>Имя</th><th>IP</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Контейнеры</th></tr>
+  </thead>
+  <tbody>
+  {{range .Servers}}
+    <tr>
+      <td><a href="/servercore">{{.Name}}</a></td>
+      <td>{{.IpAddress}}</td>
+      <td>{{if .IsAvailable}}<span class="badge badge-success">{{.Status}}</span>{{else}}<span class="badge badge-danger">{{.Status}}</span>{{end}}</td>
+      <td>{{printf "%.1f%%" .CpuUsagePercent}}</td>
+      <td>{{printf "%.1f%%" .MemoryUsagePercent}}</td>
+      <td>{{printf "%.1f%%" .DiskUsagePercent}}</td>
+      <td>{{.RunningContainers}}/{{.TotalContainers}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<h3>📊 Графики метрик (real-time)</h3>
+<div class="card">
+  <canvas id="metricsChart" height="100"></canvas>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  const ctx = document.getElementById('metricsChart');
+  if (!ctx || typeof Chart === 'undefined') return;
+  const chart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: [], datasets: [
+      { label: 'CPU %', data: [], backgroundColor: '#3b82f6' },
+      { label: 'RAM %', data: [], backgroundColor: '#f59e0b' },
+      { label: 'Disk %', data: [], backgroundColor: '#ef4444' },
+    ]},
+    options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
+  });
+  function refresh() {
+    fetch('/api/metrics/history').then(r => r.json()).then(d => {
+      chart.data.labels = (d.servers || []).map(s => s.name);
+      chart.data.datasets[0].data = (d.servers || []).map(s => s.cpu);
+      chart.data.datasets[1].data = (d.servers || []).map(s => s.ram);
+      chart.data.datasets[2].data = (d.servers || []).map(s => s.disk);
+      chart.update('none');
+    }).catch(() => {});
+  }
+  refresh();
+  setInterval(refresh, 30000);
+})();
+</script>
+{{end}}

@@ -1,0 +1,27 @@
+{{define "content"}}
+{{range .Statuses}}
+<div class="card">
+  <h3>📓 Graylog {{.Label}} {{if .Ok}}<span class="badge badge-success">OK</span>{{else}}<span class="badge badge-danger">ERROR</span>{{end}}</h3>
+  <p><a href="/graylog/{{.Env}}">Открыть окружение →</a></p>
+  {{if .Error}}
+  <div class="alert alert-warning">⚠️ {{.Error}}</div>
+  {{end}}
+  {{if .Nodes}}
+  <table class="table">
+    <thead><tr><th>Нода</th><th>Lifecycle</th><th>Messages</th></tr></thead>
+    <tbody>
+    {{range .Nodes}}
+      <tr>
+        <td>{{.Hostname}}</td>
+        <td>{{.Lifecycle}}</td>
+        <td>{{.ProcessingMessages}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</div>
+{{else}}
+<div class="alert alert-info">Graylog не настроен.</div>
+{{end}}
+{{end}}

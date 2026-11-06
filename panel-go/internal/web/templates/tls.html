@@ -1,0 +1,349 @@
+{{define "content"}}
+<h3>🔒 TLS-конфигурация серверов</h3>
+<p class="muted">Комплексная проверка: версии TLS и cipher suites на всех обнаруженных портах (включая порты Docker и слушающие по <code>ss</code>), протокол на порту (HTTPS/HTTP/TLS/TCP), nginx и контейнеры. Linux — OpenSSL по SSH; Windows/MikroTik — встроенный сканер прямым соединением (SSH не используется).</p>
+
+<div class="form-inline" style="margin-bottom:16px;">
+  <button class="btn btn-primary" id="tlsStartBtn" onclick="startTLSScan()">▶️ Запустить</button>
+  <button class="btn btn-danger" id="tlsStopBtn" onclick="stopTLSScan()" disabled>⏹ Остановить</button>
+  <button class="btn" id="tlsPdfBtn" onclick="exportTLSPDF()" disabled>📄 Выгрузить отчёт в PDF</button>
+</div>
+
+<!-- Статус / прогресс проверки -->
+<div class="card" id="tls-status-card" style="display:none">
+  <h4><span class="spinner spinner-lg"></span> <span id="tls-status-title">Запуск проверки TLS...</span></h4>
+  <p id="tls-timer">⏱ 00:00</p>
+  <div class="progress">
+    <div class="progress-bar" id="tls-progress-bar" style="width:0%">0%</div>
+  </div>
+  <p class="muted" id="tls-current"></p>
+</div>
+
+<div class="alert alert-danger" id="tls-error" style="display:none"></div>
+
+<!-- Результаты (рендерятся JS после завершения проверки) -->
+<div id="tls-results"></div>
+
+<script src="/static/js/jspdf.umd.min.js"></script>
+<script src="/static/js/jspdf.plugin.autotable.min.js"></script>
+<script>
+let _tlsData = null;
+let _tlsTimerInt = null;
+let _tlsStartedAt = 0;
+
+function tlsFmtTime(ms) {
+  ms = Math.max(0, Math.floor(ms / 1000));
+  const m = String(Math.floor(ms / 60)).padStart(2, '0');
+  const s = String(ms % 60).padStart(2, '0');
+  return m + ':' + s;
+}
+
+function tlsShowRunning(st) {
+  const card = document.getElementById('tls-status-card');
+  card.style.display = '';
+  document.getElementById('tls-error').style.display = 'none';
+  document.getElementById('tlsStartBtn').disabled = true;
+  document.getElementById('tlsStopBtn').disabled = false;
+  if (!_tlsStartedAt) _tlsStartedAt = Date.now() - (st.elapsed_ms || 0);
+  const tick = function() {
+    const el = document.getElementById('tls-timer');
+    if (el) el.textContent = '⏱ ' + tlsFmtTime(Date.now() - _tlsStartedAt);
+  };
+  if (_tlsTimerInt) clearInterval(_tlsTimerInt);
+  tick();
+  _tlsTimerInt = setInterval(tick, 1000);
+  const total = st.total || 0, done = st.done || 0;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  document.getElementById('tls-progress-bar').style.width = pct + '%';
+  document.getElementById('tls-progress-bar').textContent = pct + '%';
+  document.getElementById('tls-status-title').textContent = 'Идёт проверка TLS...';
+  document.getElementById('tls-current').textContent = total
+    ? ('Сервер ' + done + ' из ' + total + (st.current ? ': ' + st.current : ''))
+    : (st.current ? 'Проверка: ' + st.current : 'Подготовка...');
+}
+
+function tlsShowIdle() {
+  if (_tlsTimerInt) { clearInterval(_tlsTimerInt); _tlsTimerInt = null; }
+  document.getElementById('tls-status-card').style.display = 'none';
+  document.getElementById('tls-error').style.display = 'none';
+  document.getElementById('tlsStartBtn').disabled = false;
+  document.getElementById('tlsStopBtn').disabled = true;
+  document.getElementById('tlsPdfBtn').disabled = !_tlsData;
+}
+
+function tlsShowError(msg) {
+  if (_tlsTimerInt) { clearInterval(_tlsTimerInt); _tlsTimerInt = null; }
+  const card = document.getElementById('tls-status-card');
+  if (card) card.style.display = 'none';
+  document.getElementById('tlsStartBtn').disabled = false;
+  document.getElementById('tlsStopBtn').disabled = true;
+  const e = document.getElementById('tls-error');
+  e.style.display = '';
+  e.textContent = '⚠️ ' + msg;
+}
+
+function tlsFetchJSON(url, opts) {
+  return fetch(url, opts).then(function(r) { return r.json(); });
+}
+
+function startTLSScan() {
+  _tlsStartedAt = 0;
+  tlsFetchJSON('/api/tls/scan', {method: 'POST'}).then(function(st) {
+    if (st.state === 'running') { tlsShowRunning(st); pollTLS(); }
+    else if (st.state === 'done') { loadTLSData(); }
+    else tlsShowError(st.error || 'Не удалось запустить проверку');
+  }).catch(function(e) { tlsShowError('Сетевая ошибка: ' + e); });
+}
+
+function stopTLSScan() {
+  tlsFetchJSON('/api/tls/stop', {method: 'POST'}).then(function(st) {
+    if (_tlsTimerInt) { clearInterval(_tlsTimerInt); _tlsTimerInt = null; }
+    tlsShowError(st.error || 'Сканирование остановлено');
+  }).catch(function(e) { tlsShowError('Сетевая ошибка: ' + e); });
+}
+
+function pollTLS() {
+  setTimeout(function() {
+    tlsFetchJSON('/api/tls/status').then(function(st) {
+      if (st.state === 'running') { tlsShowRunning(st); pollTLS(); }
+      else if (st.state === 'done' && st.fresh) { loadTLSData(); }
+      else if (st.state === 'error') { tlsShowError(st.error || 'Ошибка сканирования'); }
+      else { tlsShowIdle(); }
+    }).catch(function(e) { tlsShowError('Сетевая ошибка: ' + e); });
+  }, 1000);
+}
+
+function loadTLSData() {
+  tlsFetchJSON('/api/tls/data').then(function(d) {
+    if (d.error) { tlsShowError(d.error); return; }
+    _tlsData = d;
+    tlsRender(d);
+    document.getElementById('tlsStartBtn').disabled = false;
+    document.getElementById('tlsStopBtn').disabled = true;
+  }).catch(function(e) { tlsShowError('Сетевая ошибка: ' + e); });
+}
+
+function tlsInit() {
+  tlsFetchJSON('/api/tls/status').then(function(st) {
+    if (st.state === 'running') { tlsShowRunning(st); pollTLS(); }
+    else if (st.state === 'done' && st.fresh) { loadTLSData(); }
+    else { tlsShowIdle(); }
+  }).catch(function(e) { tlsShowError('Сетевая ошибка: ' + e); });
+}
+
+// ── Рендер результатов ──
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function tlsBadgeHtml(ok) {
+  if (ok === true) return '<span class="badge badge-success">✓</span>';
+  if (ok === false) return '<span class="badge badge-danger">✗</span>';
+  return '<span class="badge badge-info">n/a</span>';
+}
+function protoBadgeHtml(p) {
+  const cls = p === 'https' ? 'badge-success' : (p === 'http' ? 'badge-warning' : ((p === 'tls' || p === 'tcp') ? 'badge-info' : ''));
+  return '<span class="badge ' + cls + '">' + esc(p || 'n/a') + '</span>';
+}
+function tlsCipherText(v, ver) {
+  for (const k in v) {
+    if (v[k] && k.indexOf('\u2192') !== -1 && k.indexOf(ver) === 0) {
+      return k.substring(k.indexOf('\u2192') + 1).trim();
+    }
+  }
+  return '';
+}
+function renderTLSServerCard(s) {
+  let h = '<div class="card"><h4>🖥 ' + esc(s.ServerName || '?') + ' <small>(' + esc([s.IP, s.OS, s.Engine].filter(Boolean).join(' · ')) + ')</small></h4>';
+  if (s.Error) h += '<div class="alert alert-warning">⚠️ ' + esc(s.Error) + '</div>';
+  const ng = s.Nginx || {};
+  if (ng.Installed) {
+    h += '<p><strong>nginx:</strong> ' + (ng.Running ? '<span class="badge badge-success">запущен</span>' : '<span class="badge badge-danger">не запущен</span>');
+    if (ng.ConfigPath) h += ' · конфиг: <code>' + esc(ng.ConfigPath) + '</code>';
+    if (ng.SSLProtocols && ng.SSLProtocols.length) h += ' · ssl_protocols: <code>' + esc(ng.SSLProtocols.join('; ')) + '</code>';
+    if (ng.ListenSSL && ng.ListenSSL.length) h += ' · listen ssl: ' + esc(ng.ListenSSL.join(', '));
+    h += '</p>';
+    (ng.Issues || []).forEach(function(iss) { h += '<div class="text-danger">• ' + esc(iss) + '</div>'; });
+  }
+  if (s.DockerPorts && s.DockerPorts.length) h += '<p><strong>Docker:</strong> опубликованные порты контейнеров: ' + esc(s.DockerPorts.join(', ')) + '</p>';
+  if (s.HTTPPorts && s.HTTPPorts.length) h += '<p><strong>HTTP без TLS:</strong> порты ' + esc(s.HTTPPorts.join(', ')) + '</p>';
+
+  const ports = s.Ports || [];
+  if (ports.length) {
+    h += '<table class="table"><thead><tr><th>Порт / Протокол</th><th>Протокол</th><th>TLS 1.0</th><th>TLS 1.1</th><th>TLS 1.2</th><th>TLS 1.3</th><th>HTTP/2</th><th>Cipher</th><th>Сертификат</th></tr></thead><tbody>';
+    ports.forEach(function(p) {
+      const v = p.Versions || {};
+      if (p.Port === -1) {
+        h += '<tr><td>Cipher suites</td><td colspan="8">' + esc(Object.keys(v).join(' ')) + '</td></tr>';
+        return;
+      }
+      let c = tlsCipherText(v, 'TLS 1.2');
+      if (c) c = 'TLS1.2 → ' + c;
+      const c13 = tlsCipherText(v, 'TLS 1.3');
+      if (c13) c += (c ? '<br>' : '') + 'TLS1.3 → ' + c13;
+      if (p.WeakCiphers && p.WeakCiphers.length) c += '<br><span class="text-danger">слабые: ' + esc(p.WeakCiphers.join(', ')) + '</span>';
+      // ALPN / HTTP/2.
+      var alpnHtml = '—';
+      if (p.HTTP2) alpnHtml = '<span class="badge badge-success">h2</span>';
+      else if (p.ALPN && p.ALPN.length) alpnHtml = '<span class="badge badge-info">' + esc(p.ALPN.join(', ')) + '</span>';
+      if (p.HTTP3) alpnHtml += ' <span class="badge badge-success">h3</span>';
+      // Сертификат (пункт 46).
+      var certHtml = '—';
+      if (p.Cert) {
+        var ci = p.Cert;
+        var cls = ci.is_expired ? 'badge-danger' : (ci.is_expiring_soon ? 'badge-warning' : 'badge-success');
+        certHtml = '<span class="badge ' + cls + '">' + esc(ci.days_left || ci.expires_in_days + ' дн.') + '</span>';
+        certHtml += '<br><small>' + esc(ci.subject || '?') + '</small>';
+        certHtml += '<br><small class="muted">issuer: ' + esc(ci.issuer || '?') + '</small>';
+        if (ci.self_signed) certHtml += '<br><span class="text-danger">самоподписанный</span>';
+        if (!ci.hostname_match) certHtml += '<br><span class="text-warning">⚠ hostname mismatch</span>';
+        if (ci.auto_renew) certHtml += '<br><small class="muted">' + esc(ci.auto_renew) + '</small>';
+      }
+      // Редирект HTTP→HTTPS.
+      if (p.HTTPRedirect) certHtml += '<br><span class="badge badge-success">→HTTPS: ' + esc(p.HTTPRedirect.substring(0, 40)) + '</span>';
+      h += '<tr><td>' + p.Port + '</td><td>' + protoBadgeHtml(p.Protocol) + '</td>'
+        + '<td>' + tlsBadgeHtml(v['TLS 1.0']) + '</td><td>' + tlsBadgeHtml(v['TLS 1.1']) + '</td>'
+        + '<td>' + tlsBadgeHtml(v['TLS 1.2']) + '</td><td>' + tlsBadgeHtml(v['TLS 1.3']) + '</td>'
+        + '<td>' + alpnHtml + '</td>'
+        + '<td>' + c + '</td><td>' + certHtml + '</td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  if (s.Recommendations && s.Recommendations.length) {
+    h += '<h5>Рекомендации</h5><ul>';
+    s.Recommendations.forEach(function(r) { h += '<li>' + esc(r) + '</li>'; });
+    h += '</ul>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function tlsRender(d) {
+  if (_tlsTimerInt) { clearInterval(_tlsTimerInt); _tlsTimerInt = null; }
+  document.getElementById('tls-status-card').style.display = 'none';
+  document.getElementById('tls-error').style.display = 'none';
+  document.getElementById('tlsPdfBtn').disabled = false;
+
+  const tips = d.tips || [];
+  let html = '<div class="card"><h4>💡 Общие рекомендации по TLS</h4><ul>';
+  tips.forEach(function(t) { html += '<li>' + esc(t) + '</li>'; });
+  html += '</ul></div>';
+
+  const servers = d.servers || [];
+  if (!servers.length) {
+    html += '<div class="alert alert-info">Нет доступных серверов для проверки TLS.</div>';
+  } else {
+    servers.forEach(function(s) { html += renderTLSServerCard(s); });
+  }
+  document.getElementById('tls-results').innerHTML = html;
+}
+
+// ── Экспорт в PDF (шрифт DejaVu с кириллицей загружается из /static/fonts) ──
+function exportTLSPDF() {
+  const d = _tlsData;
+  if (!d) { alert('Результаты ещё не готовы.'); return; }
+  if (typeof window.jspdf === 'undefined') { alert('Библиотека jsPDF не загрузилась.'); return; }
+  const servers = d.servers || [];
+  const tips = d.tips || [];
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const now = new Date();
+  const ts = now.toLocaleString('ru-RU');
+
+  loadPdfFont(doc, 'DejaVu').then(function() {
+    doc.setFontSize(18); doc.setTextColor(15, 20, 25);
+    doc.text('TLS Audit Report — Paylater Monitor', 40, 40);
+    doc.setFontSize(10); doc.setTextColor(120, 130, 140);
+    doc.text('Сгенерировано: ' + ts, 40, 56);
+
+    doc.setFontSize(12); doc.setTextColor(15, 20, 25);
+    doc.text('Общие рекомендации по TLS', 40, 78);
+    doc.setFontSize(9); doc.setTextColor(60, 70, 80);
+    let ty = 94;
+    tips.forEach(function(t) {
+      const lines = doc.splitTextToSize('• ' + t, pageW - 80);
+      doc.text(lines, 44, ty);
+      ty += lines.length * 11;
+    });
+
+    let y = ty + 14;
+    servers.forEach(function(s) {
+      if (y > doc.internal.pageSize.getHeight() - 80) { doc.addPage(); y = 40; }
+      doc.setFontSize(13); doc.setTextColor(15, 20, 25);
+      doc.text(s.ServerName || '?', 40, y);
+      doc.setFontSize(9); doc.setTextColor(100, 110, 120);
+      doc.text([s.IP || '', s.OS || '', s.Engine || ''].filter(Boolean).join(' · '), 40, y + 14);
+      y += 24;
+
+      if (s.Error) {
+        doc.setTextColor(200, 80, 30);
+        const el = doc.splitTextToSize('Warning: ' + s.Error, pageW - 80);
+        doc.text(el, 44, y);
+        y += el.length * 11 + 8;
+      }
+
+      const rows = [];
+      (s.Ports || []).forEach(function(p) {
+        const v = p.Versions || {};
+        const t10 = v['TLS 1.0'] === true ? 'YES' : (v['TLS 1.0'] === false ? 'no' : 'n/a');
+        const t11 = v['TLS 1.1'] === true ? 'YES' : (v['TLS 1.1'] === false ? 'no' : 'n/a');
+        const t12 = v['TLS 1.2'] === true ? 'YES' : (v['TLS 1.2'] === false ? 'no' : 'n/a');
+        const t13 = v['TLS 1.3'] === true ? 'YES' : (v['TLS 1.3'] === false ? 'no' : 'n/a');
+        let cipher = '';
+        for (const k in v) {
+          if (v[k] && k.indexOf('\u2192') !== -1) { cipher += k.substring(k.indexOf('\u2192') + 1).trim() + ' '; }
+        }
+        if ((p.WeakCiphers || []).length) cipher += ' [слабые: ' + p.WeakCiphers.join(', ') + ']';
+        var h2 = p.HTTP2 ? 'h2' : (p.ALPN && p.ALPN.length ? p.ALPN.join(',') : '-');
+        var cert = '-';
+        if (p.Cert) {
+          cert = (p.Cert.is_expired ? 'EXPIRED' : p.Cert.expires_in_days + 'd') + ' ' + (p.Cert.subject || '');
+          if (p.Cert.self_signed) cert += ' [self-signed]';
+        }
+        if (p.HTTPRedirect) cert += ' [→HTTPS]';
+        rows.push([p.Port === -1 ? 'Cipher suites' : String(p.Port), t10, t11, t12, t13, h2, cipher.trim(), cert]);
+      });
+
+      if (rows.length) {
+        doc.autoTable({
+          startY: y,
+          head: [['Port', 'TLS1.0', 'TLS1.1', 'TLS1.2', 'TLS1.3', 'HTTP/2', 'Cipher', 'Cert']],
+          body: rows,
+          theme: 'grid',
+          headStyles: { fillColor: [36, 52, 71], textColor: 255, fontSize: 7, font: 'DejaVu' },
+          bodyStyles: { fontSize: 7, textColor: [40, 50, 60], font: 'DejaVu' },
+          columnStyles: { 0: { cellWidth: 40 }, 6: { cellWidth: 120 }, 7: { cellWidth: 120 } },
+          margin: { left: 40, right: 40 },
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      if (s.Recommendations && s.Recommendations.length) {
+        if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 40; }
+        doc.setFontSize(10); doc.setTextColor(15, 20, 25);
+        doc.text('Рекомендации:', 40, y);
+        doc.setFontSize(8); doc.setTextColor(60, 70, 80);
+        y += 13;
+        s.Recommendations.forEach(function(r) {
+          const lines = doc.splitTextToSize('• ' + r, pageW - 80);
+          if (y + lines.length * 10 > doc.internal.pageSize.getHeight() - 30) { doc.addPage(); y = 40; }
+          doc.text(lines, 44, y);
+          y += lines.length * 10 + 2;
+        });
+      }
+      y += 12;
+    });
+
+    const pages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8); doc.setTextColor(150, 160, 170);
+      doc.text('Paylater Monitor · Mikhail Gubin, DevOps · ' + ts + ' · стр. ' + i + '/' + pages,
+        40, doc.internal.pageSize.getHeight() - 16);
+    }
+    doc.save('tls-report-' + now.toISOString().slice(0, 10) + '.pdf');
+  }).catch(function(e) { alert('Не удалось загрузить шрифт для PDF: ' + e); });
+}
+
+document.addEventListener('DOMContentLoaded', tlsInit);
+</script>
+{{end}}

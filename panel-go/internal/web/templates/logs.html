@@ -1,0 +1,29 @@
+{{define "content"}}
+<h3>📜 Логи приложения</h3>
+<div class="card">
+  <p class="muted">Файл: {{if .LogPath}}{{.LogPath}}{{else}}лог-файл не настроен{{end}}</p>
+  <div class="form-inline" style="margin-bottom:8px">
+    <button class="btn btn-sm btn-primary" onclick="refreshLogs()">🔄 Обновить</button>
+    <label class="muted" style="margin-left:8px">Автообновление каждые 5 секунд</label>
+  </div>
+  <pre class="log-view" id="appLogs" style="max-height:70vh">Загрузка...</pre>
+</div>
+<script>
+function refreshLogs() {
+  fetch('/api/logs/recent?lines=1000')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('appLogs');
+      const content = d.content || '';
+      el.textContent = content || '(лог-файл пуст)';
+      // Автопрокрутка вниз, если уже внизу.
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      if (nearBottom || el.dataset.first) el.scrollTop = el.scrollHeight;
+      el.dataset.first = '1';
+    })
+    .catch(() => {});
+}
+refreshLogs();
+setInterval(refreshLogs, 5000);
+</script>
+{{end}}

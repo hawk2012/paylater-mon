@@ -1,0 +1,88 @@
+/* Paylater Monitor — базовые стили */
+:root {
+  --bg: #0f1419; --bg2: #1a2332; --bg3: #243447;
+  --fg: #e0e6ed; --fg2: #9fb2c4;
+  --accent: #3b82f6; --accent2: #2563eb;
+  --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+  --border: #2d3e50;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--fg); font-size: 14px; }
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 240px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); }
+.sidebar-header h1 { font-size: 16px; font-weight: 600; }
+.nav { padding: 8px 0; flex: 1; overflow-y: auto; }
+.nav-item { display: block; padding: 10px 16px; color: var(--fg2); text-decoration: none; transition: all .15s; }
+.nav-item:hover { background: var(--bg3); color: var(--fg); }
+.nav-item.active { background: var(--accent); color: #fff; }
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.content-header { padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+.content-header h2 { font-size: 18px; font-weight: 600; }
+.content-body { flex: 1; padding: 24px; overflow-y: auto; }
+h3 { margin: 16px 0 8px; font-size: 15px; font-weight: 600; color: var(--fg); }
+h4 { margin: 8px 0; font-size: 13px; font-weight: 600; color: var(--fg2); }
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.grid { display: grid; gap: 16px; margin-bottom: 16px; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+.grid-3 { grid-template-columns: repeat(3,1fr); }
+.grid-4 { grid-template-columns: repeat(4,1fr); }
+.stat-card { text-align: center; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--accent); }
+.stat-label { font-size: 12px; color: var(--fg2); margin-top: 4px; }
+.text-danger { color: var(--red) !important; }
+.table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+.table th { text-align: left; padding: 8px 12px; background: var(--bg3); font-size: 12px; font-weight: 600; color: var(--fg2); border-bottom: 1px solid var(--border); }
+.table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.table tr:hover { background: var(--bg3); }
+.row-critical td { background: rgba(239,68,68,.08); }
+.row-warning td { background: rgba(245,158,11,.08); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge-success { background: var(--green); color: #fff; }
+.badge-danger { background: var(--red); color: #fff; }
+.badge-warning { background: var(--yellow); color: #000; }
+.badge-info { background: var(--accent); color: #fff; }
+.alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+.alert-success { background: rgba(34,197,94,.1); border: 1px solid var(--green); color: var(--green); }
+.alert-warning { background: rgba(245,158,11,.1); border: 1px solid var(--yellow); color: var(--yellow); }
+.alert-danger { background: rgba(239,68,68,.1); border: 1px solid var(--red); color: var(--red); }
+.alert-info { background: rgba(59,130,246,.1); border: 1px solid var(--accent); color: var(--accent); }
+.btn { display: inline-block; padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-success { background: var(--green); color: #fff; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-warning { background: var(--yellow); color: #000; }
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+.input { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; color: var(--fg); font-size: 13px; }
+.input:focus { outline: none; border-color: var(--accent); }
+.form { display: flex; flex-direction: column; gap: 8px; max-width: 600px; }
+.form label { font-size: 12px; color: var(--fg2); }
+.form-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.log-view { background: #000; color: #0f0; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 500px; overflow-y: auto; }
+.log-line { padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
+.log-ts { color: #888; }
+.muted { color: var(--fg2); }
+.ai-result { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-top: 16px; }
+.ai-result pre { white-space: pre-wrap; font-size: 12px; }
+
+/* Спиннер и прогресс для асинхронных проверок (TLS / Staging-TLS). */
+.spinner {
+  display: inline-block; width: 16px; height: 16px; vertical-align: -2px;
+  border: 3px solid var(--bg3); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+.spinner-lg { width: 26px; height: 26px; vertical-align: -6px; border-width: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.progress {
+  height: 12px; background: var(--bg3); border-radius: 6px; overflow: hidden; margin: 8px 0;
+}
+.progress-bar {
+  height: 100%; width: 0%; background: var(--accent); color: #fff;
+  font-size: 10px; line-height: 12px; text-align: center; border-radius: 6px;
+  transition: width .4s ease;
+}
+#tls-timer, #staging-timer {
+  font-size: 26px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums;
+}

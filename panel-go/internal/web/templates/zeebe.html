@@ -1,0 +1,54 @@
+{{define "content"}}
+<div class="env-switcher">
+  {{range .AvailableEnvs}}
+  <a href="/camunda/{{.}}/zeebe" class="btn btn-sm {{if eq . $.Env}}btn-primary{{else}}btn-default{{end}}">{{. | upper}}</a>
+  {{end}}
+  <span class="muted">Текущее: {{.Env | upper}}</span>
+  <span class="muted">URL: {{.EnvURL}}</span>
+</div>
+
+<div class="grid grid-3">
+  <div class="card stat-card">
+    <div class="stat-value">{{.ActiveInstances}}</div>
+    <div class="stat-label">Active instances</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value">{{if .Metrics}}{{if .Metrics.IsConnected}}🟢{{else}}🔴{{end}}{{else}}—{{end}}</div>
+    <div class="stat-label">Prometheus</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value">{{if .Metrics}}{{len .Metrics.Counters}}{{else}}0{{end}}</div>
+    <div class="stat-label">Counters</div>
+  </div>
+</div>
+
+{{if .Metrics.ErrorMessage}}
+<div class="alert alert-warning">⚠️ {{.Metrics.ErrorMessage}}</div>
+{{end}}
+
+{{if .Metrics.Counters}}
+<h3>📊 Counters</h3>
+<table class="table">
+  <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+  <tbody>
+  {{range $k, $v := .Metrics.Counters}}
+    <tr><td>{{$k}}</td><td>{{printf "%.0f" $v}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{if .Metrics.Gauges}}
+<h3>📈 Gauges</h3>
+<table class="table">
+  <thead><tr><th>Метрика</th><th>Значение</th></tr></thead>
+  <tbody>
+  {{range $k, $v := .Metrics.Gauges}}
+    <tr><td>{{$k}}</td><td>{{printf "%.2f" $v}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<p><a href="/zeebe-processes" class="btn btn-primary">📋 Процессы и инциденты →</a></p>
+{{end}}

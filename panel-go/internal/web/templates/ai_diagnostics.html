@@ -1,0 +1,52 @@
+{{define "content"}}
+{{if not .AiEnabled}}
+<div class="alert alert-warning">⚠️ ИИ-диагностика не настроена. Укажите ChatGPT API key или Koda CLI path в config.yaml.</div>
+{{end}}
+
+<div class="grid grid-3">
+  <div class="card stat-card">
+    <div class="stat-value{{if gt (len .Problems) 0}} text-danger{{end}}">{{len .Problems}}</div>
+    <div class="stat-label">Обнаружено проблем</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value">{{if .AutoResolve}}ВКЛ{{else}}ВЫКЛ{{end}}</div>
+    <div class="stat-label">Auto-resolve</div>
+  </div>
+  <div class="card stat-card">
+    <div class="stat-value">{{len .Providers}}</div>
+    <div class="stat-label">Провайдеров</div>
+  </div>
+</div>
+
+{{if gt (len .Problems) 0}}
+<h3>🔴 Обнаруженные проблемы</h3>
+<table class="table">
+  <thead><tr><th>Сервер</th><th>Тип</th><th>Серьёзность</th><th>Описание</th><th>Действие</th></tr></thead>
+  <tbody>
+  {{range $i, $p := .Problems}}
+    <tr class="{{if eq $p.Severity "critical"}}row-critical{{else}}row-warning{{end}}">
+      <td>{{$p.ServerName}}</td>
+      <td>{{$p.Type}}</td>
+      <td><span class="badge badge-{{if eq $p.Severity "critical"}}danger{{else}}warning{{end}}">{{$p.Severity}}</span></td>
+      <td>{{$p.Title}}</td>
+      <td><button class="btn btn-sm btn-primary" onclick="aiDiagnose({{json $p}})">🤖 Диагноз</button></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-success">✅ Проблем не обнаружено.</div>
+{{end}}
+
+<h3>🔍 Ручной запрос</h3>
+<form id="aiManualForm" class="form">
+  <select name="server" class="input">
+    <option value="">— Выберите сервер —</option>
+    {{range .Servers}}<option value="{{.Name}}">{{.Name}}</option>{{end}}
+  </select>
+  <textarea name="query" placeholder="Опишите проблему..." class="input" rows="3" style="width:100%"></textarea>
+  <button type="submit" class="btn btn-primary" {{if not .AiEnabled}}disabled{{end}}>Диагностировать</button>
+</form>
+
+<div id="aiResult" class="ai-result" style="display:none"></div>
+{{end}}

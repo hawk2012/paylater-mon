@@ -1,0 +1,140 @@
+# Paylater Monitor — конфигурация (YAML)
+
+server:
+  listen_addr: "0.0.0.0:9090"
+
+auth:
+  enabled: false
+  username: "admin"
+  password: "admin"
+
+secret_refs:
+  enabled: false
+  vault_prefix: "kv/data/paylater-mon/config"
+
+servercore:
+  enabled: true
+  api_base: "https://api.servercore.com"
+  # Анонимизировано: реальное значение — в config.local.yaml или Vault.
+  api_token: "<SERVERCORE_API_TOKEN>"
+  iam_username: "paylater-iam"
+  iam_domain_name: "608542"
+  iam_password: "<IAM_PASSWORD>"
+  iam_project_id: "ca09f8486a0f46799ead80fec64ab962"
+  ssh_port: 22
+  ssh_username: "root"
+  ssh_private_key_path: ""
+  # Серверы, выведенные из эксплуатации (имя или IP) — исключаются из
+  # мониторинга, списков контейнеров, метрик и TLS-аудита.
+  # Боевым сервером Camunda является uz-prod-camunda87-1.
+  # uz-prod-camunda-1 (172.31.32.61) выведен из эксплуатации.
+  # 172.31.32.37 не отвечает по SSH и спамит ошибками.
+  excluded_servers:
+    - "uz-prod-camunda-1"
+    - "uz-preprod-connector-camunda-1"
+    - "uz-st-mkrt-1"
+    - "172.31.32.37"
+
+  # Группировка серверов по имени (substring). Серверы из групп с
+  # monitored=false не опрашиваются по SSH (контейнеры, метрики).
+  # Приоритет: excluded_servers > server_groups > "Прочие".
+  server_groups:
+    - name: "Mikrotik"
+      pattern: "mkrt"
+      monitored: false
+    - name: "Администрация"
+      pattern: "adm"
+      monitored: false
+    - name: "Мобилка"
+      pattern: "mob"
+      monitored: true
+    - name: "Тестовые"
+      pattern: "test"
+      monitored: true
+    - name: "Боевые"
+      pattern: "prod"
+      monitored: true
+
+zeebe:
+  url: "http://172.31.32.69"
+  prod_url: "http://172.31.32.69"
+  test_url: ""
+  operate_port: 8080
+  stuck_threshold_hours: 24
+  # SSH-сервер для туннеля Zeebe. Если пусто — определяется автоматически
+  # по IP из prod_url/test_url (172.31.32.69 → uz-prod-camunda87-1),
+  # затем по имени "uz-{env}-camunda".
+  server_name: ""
+
+graylog:
+  api_port: 9000
+  prod:
+    url: "https://graylog.paylater.uz/api/"
+    username: "admin"
+    password: "<GRAYLOG_PROD_PASSWORD>"
+  test:
+    url: "https://test-graylog.paylater.uz/api/"
+    username: "admin"
+    password: "<GRAYLOG_TEST_PASSWORD>"
+
+msteams:
+  # Анонимизировано: реальное значение — в config.local.yaml.
+  webhook_url: "<MSTEAMS_WEBHOOK_URL>"
+
+docker:
+  enabled: true
+
+disk:
+  root_path: "/"
+  root_name: "Корневой раздел /"
+
+ai_diagnostics:
+  enabled: true
+  cli_path: "koda"
+  auto_resolve: false
+  chatgpt_enabled: true
+  chatgpt_api_key: "<OPENAI_API_KEY>"
+  chatgpt_api_base: "https://api.openai.com"
+  selected_provider: "chatgpt"
+  selected_model: "gpt-4o"
+
+ephemeral_access:
+  enabled: true
+  default_duration_minutes: 60
+  max_duration_minutes: 480
+  max_active_keys_per_server: 5
+  auto_cleanup_expired: true
+
+vault:
+  enabled: true
+  api_base: "https://vh.paylater.uz"
+  root_token: "<VAULT_ROOT_TOKEN>"
+  use_root_token: true
+  kv1_path: "ephemeral"
+  kv2_path: "ephemeral/data"
+  cache_ttl_minutes: 5
+
+container_diagnostics:
+  warn_cpu_percent: 80
+  warn_memory_percent: 80
+  critical_server_percent: 90
+  restart_count_threshold: 5
+  stale_days_threshold: 30
+  memory_leak_percent: 90
+
+automation:
+  gitlab_api_base: "https://gl-01.paylater.uz"
+  gitlab_token: ""
+  repo_project_path: ""
+  repo_branch: "main"
+  exec_server_host: "uz-adm-nuget-1"
+
+staging_tls:
+  enabled: true
+  load_test_connections: 20
+  load_test_concurrency: 5
+  max_prod_scan: 20
+  load_test_target_port: 0
+  load_test_timeout_sec: 60
+  scan_concurrency: 4
+  nginx_fronted: true

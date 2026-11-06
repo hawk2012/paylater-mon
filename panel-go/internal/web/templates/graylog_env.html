@@ -1,0 +1,59 @@
+{{define "content"}}
+<h3>📓 Graylog {{.Env | upper}} — Ноды</h3>
+{{if .NodeError}}
+<div class="alert alert-warning">⚠️ {{.NodeError}}</div>
+{{end}}
+{{if .Nodes}}
+<table class="table">
+  <thead><tr><th>Нода</th><th>Lifecycle</th><th>Messages</th><th>Throughput</th></tr></thead>
+  <tbody>
+  {{range .Nodes}}
+    <tr>
+      <td>{{.Hostname}}</td>
+      <td>{{.Lifecycle}}</td>
+      <td>{{.ProcessingMessages}}</td>
+      <td>{{.Throughput}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-warning">Ноды недоступны.</div>
+{{end}}
+
+<h3>📋 Streams</h3>
+{{if .Streams}}
+<table class="table">
+  <thead><tr><th>ID</th><th>Название</th></tr></thead>
+  <tbody>
+  {{range .Streams}}
+    <tr><td>{{.ID}}</td><td>{{.Title}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<h3>🔍 Поиск логов</h3>
+<form method="get" action="/graylog/{{.Env}}">
+  <input type="text" name="q" value="{{.Query}}" placeholder="query" class="input" style="width:60%">
+  <select name="range" class="input">
+    <option value="300"{{if eq .Range 300}} selected{{end}}>5 минут</option>
+    <option value="900"{{if eq .Range 900}} selected{{end}}>15 минут</option>
+    <option value="3600"{{if eq .Range 3600}} selected{{end}}>1 час</option>
+    <option value="21600"{{if eq .Range 21600}} selected{{end}}>6 часов</option>
+    <option value="86400"{{if eq .Range 86400}} selected{{end}}>24 часа</option>
+  </select>
+  <button type="submit" class="btn btn-primary">Поиск</button>
+</form>
+
+{{if .Search}}
+<h3>📄 Результаты</h3>
+<div class="log-view">
+{{range $i, $m := .Search.Messages}}
+<div class="log-line"><span class="log-ts">{{$m.Timestamp}}</span> {{$m.Message}}</div>
+{{else}}
+<p>Нет результатов.</p>
+{{end}}
+</div>
+{{end}}
+{{end}}

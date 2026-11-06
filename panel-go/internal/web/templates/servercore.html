@@ -1,0 +1,47 @@
+{{define "content"}}
+{{if not .MonitoringEnabled}}
+<div class="alert alert-warning">⚠️ Мониторинг серверов не подключен. Проверьте IAM-учётные данные ServerCore.</div>
+{{end}}
+{{if .ServerError}}
+<div class="alert alert-danger">❌ {{.ServerError}}</div>
+{{end}}
+
+{{range .Groups}}
+{{ $monitored := .Monitored }}
+<div class="card" style="margin-bottom:16px">
+  <h4>{{.Name}}{{if not $monitored}} <span class="badge">не мониторится</span>{{end}}</h4>
+  {{if .Servers}}
+  <table class="table">
+    <thead>
+      <tr><th>Имя</th><th>IP</th><th>Статус</th><th>ОС</th>{{if $monitored}}<th>CPU</th><th>RAM</th><th>Disk</th><th>Uptime</th><th>Контейнеры</th>{{end}}</tr>
+    </thead>
+    <tbody>
+    {{range .Servers}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td>{{.IpAddress}}</td>
+        <td>{{if .IsAvailable}}<span class="badge badge-success">{{.Status}}</span>{{else}}<span class="badge badge-danger">{{.Status}}</span>{{end}}</td>
+        <td>{{.OperatingSystem}}</td>
+        {{if $monitored}}
+        <td>{{printf "%.1f%%" .CpuUsagePercent}}</td>
+        <td>{{printf "%.1f%%" .MemoryUsagePercent}}</td>
+        <td>{{printf "%.1f%%" .DiskUsagePercent}}</td>
+        <td>{{.Uptime}}</td>
+        <td>{{.RunningContainers}}/{{.TotalContainers}}</td>
+        {{end}}
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">Нет серверов в этой группе.</p>
+  {{end}}
+</div>
+{{end}}
+
+{{if not .Groups}}
+{{if not .ServerError}}
+<div class="alert alert-info">Серверы не получены. Если мониторинг включён — проверьте доступность ServerCore API и наличие compute-серверов в проекте.</div>
+{{end}}
+{{end}}
+{{end}}

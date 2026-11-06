@@ -1,0 +1,555 @@
+{{define "content"}}
+<h3>🧪 Staging-TLS — проверка готовности PROD к TLS 1.3</h3>
+<p class="muted">
+  PROD-серверы берутся напрямую из списка ServerCore (по имени «prod») и проверяются:
+  версии TLS и cipher suites на всех портах, протоколы (HTTPS/TLS/HTTP), nginx, Docker,
+  версии ПО (OpenSSL/Java/Node), нагрузочный тест TLS 1.3. По итогу — отчёт о проблемах
+  и вердикт готовности PROD к включению TLS 1.3.
+</p>
+
+<div class="form-inline" style="margin-bottom:16px;">
+  <button class="btn btn-primary" id="stagingStartBtn" onclick="startStagingScan()">▶️ Запустить</button>
+  <button class="btn btn-danger" id="stagingStopBtn" onclick="stopStagingScan()" disabled>⏹ Остановить</button>
+  <button class="btn" id="stagingPdfBtn" onclick="exportStagingPDF()" disabled>📄 Выгрузить отчёт в PDF</button>
+</div>
+
+<!-- Пункт 45: автосоздание изолированного staging-клона PROD-сервера через Nova API -->
+<div class="card">
+  <h4>📋 Автосоздание staging-клона PROD-сервера</h4>
+  <div class="grid grid-3">
+    <div>
+      <label>PROD-сервер (источник):</label>
+      <select id="cloneSource" class="input"></select>
+    </div>
+    <div>
+      <label>Имя клона (staging):</label>
+      <input type="text" id="cloneName" class="input" placeholder="uz-stg-app-1">
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn btn-primary" onclick="startStagingClone()">🔁 Создать клон</button>
+    </div>
+  </div>
+  <p class="muted" id="cloneResult" style="margin-top:8px;"></p>
+  <p class="muted small">Создаётся резервная копия диска PROD-сервера (snapshot через Nova createImage / Cinder volume snapshot), затем из неё разворачивается изолированная ВМ-клон с тем же flavor. Дополнительно копируются nginx-конфиг и docker-compose.yml (best-effort). Пункт 45 IMPROVEMENTS.md.</p>
+</div>
+
+<script>
+// Пункт 45: заполнение селекта PROD-серверов и запуск клонирования.
+async function loadProdServers() {
+  try {
+    const r = await fetch('/api/servercore/servers');
+    const data = await r.json();
+    const sel = document.getElementById('cloneSource');
+    if (!data || !data.servers) return;
+    data.servers.forEach(function(sv) {
+      if (!sv.name || sv.name.indexOf('prod') === -1) return;
+      const opt = document.createElement('option');
+      opt.value = sv.name;
+      opt.textContent = sv.name + (sv.operating_system ? ' (' + sv.operating_system + ')' : '');
+      sel.appendChild(opt);
+    });
+    if (sel.options.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '— PROD-серверы не найдены —';
+      sel.appendChild(opt);
+    }
+  } catch (e) { /* offline */ }
+}
+
+function startStagingClone() {
+  const source = document.getElementById('cloneSource').value;
+  const name = document.getElementById('cloneName').value.trim();
+  const box = document.getElementById('cloneResult');
+  if (!source) { box.textContent = 'Выберите PROD-сервер'; return; }
+  box.textContent = '⏳ Создание клона...';
+  postJSON('/api/staging-tls/clone', {server_name: source, clone_name: name}, function(r) {
+    box.textContent = r.success ? '✅ ' + r.message : '❌ ' + r.message;
+  });
+}
+
+document.addEventListener('DOMContentLoaded', loadProdServers);
+</script>
+
+<!-- Статус / прогресс проверки -->
+<div class="card" id="staging-status-card" style="display:none">
+  <h4><span class="spinner spinner-lg"></span> <span id="staging-status-title">Запуск проверки Staging-TLS...</span></h4>
+  <p id="staging-timer">⏱ 00:00</p>
+  <div class="progress">
+    <div class="progress-bar" id="staging-progress-bar" style="width:0%">0%</div>
+  </div>
+  <p class="muted" id="staging-phase"></p>
+</div>
+
+<div class="alert alert-danger" id="staging-error" style="display:none"></div>
+
+<!-- Результаты (рендерятся JS после завершения проверки) -->
+<div id="staging-results"></div>
+
+<script src="/static/js/jspdf.umd.min.js"></script>
+<script src="/static/js/jspdf.plugin.autotable.min.js"></script>
+<script>
+let _stagingData = null;
+let _stagingTimerInt = null;
+let _stagingStartedAt = 0;
+
+function stagingFmtTime(ms) {
+  ms = Math.max(0, Math.floor(ms / 1000));
+  const m = String(Math.floor(ms / 60)).padStart(2, '0');
+  const s = String(ms % 60).padStart(2, '0');
+  return m + ':' + s;
+}
+
+const STAGING_PHASES = {
+  'prod': 'Сканирование PROD-серверов (TLS/HTTP/nginx/Docker)...',
+  'versions': 'Сбор версий ПО (SSH)...',
+  'load': 'Нагрузочный тест TLS 1.3...',
+  'issues': 'Формирование отчёта...'
+};
+
+function stagingShowRunning(st) {
+  const card = document.getElementById('staging-status-card');
+  card.style.display = '';
+  document.getElementById('staging-error').style.display = 'none';
+  document.getElementById('stagingStartBtn').disabled = true;
+  document.getElementById('stagingStopBtn').disabled = false;
+  if (!_stagingStartedAt) _stagingStartedAt = Date.now() - (st.elapsed_ms || 0);
+  const tick = function() {
+    const el = document.getElementById('staging-timer');
+    if (el) el.textContent = '⏱ ' + stagingFmtTime(Date.now() - _stagingStartedAt);
+  };
+  if (_stagingTimerInt) clearInterval(_stagingTimerInt);
+  tick();
+  _stagingTimerInt = setInterval(tick, 1000);
+  const total = st.total || 0, done = st.done || 0;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  document.getElementById('staging-progress-bar').style.width = pct + '%';
+  document.getElementById('staging-progress-bar').textContent = pct + '%';
+  document.getElementById('staging-status-title').textContent = 'Идёт проверка Staging-TLS...';
+  document.getElementById('staging-phase').textContent =
+    (STAGING_PHASES[st.phase] || 'Работаем...') + (total ? (' (' + done + ' из ' + total + ')') : '');
+}
+
+function stagingShowIdle() {
+  if (_stagingTimerInt) { clearInterval(_stagingTimerInt); _stagingTimerInt = null; }
+  document.getElementById('staging-status-card').style.display = 'none';
+  document.getElementById('staging-error').style.display = 'none';
+  document.getElementById('stagingStartBtn').disabled = false;
+  document.getElementById('stagingStopBtn').disabled = true;
+  document.getElementById('stagingPdfBtn').disabled = !_stagingData;
+}
+
+function stagingShowError(msg) {
+  if (_stagingTimerInt) { clearInterval(_stagingTimerInt); _stagingTimerInt = null; }
+  const card = document.getElementById('staging-status-card');
+  if (card) card.style.display = 'none';
+  document.getElementById('stagingStartBtn').disabled = false;
+  document.getElementById('stagingStopBtn').disabled = true;
+  const e = document.getElementById('staging-error');
+  e.style.display = '';
+  e.textContent = '⚠️ ' + msg;
+}
+
+function stagingFetchJSON(url, opts) {
+  return fetch(url, opts).then(function(r) { return r.json(); });
+}
+
+function startStagingScan() {
+  _stagingStartedAt = 0;
+  stagingFetchJSON('/api/staging-tls/scan', {method: 'POST'}).then(function(st) {
+    if (st.state === 'running') { stagingShowRunning(st); pollStaging(); }
+    else if (st.state === 'done') { loadStagingData(); }
+    else stagingShowError(st.error || 'Не удалось запустить проверку');
+  }).catch(function(e) { stagingShowError('Сетевая ошибка: ' + e); });
+}
+
+function stopStagingScan() {
+  stagingFetchJSON('/api/staging-tls/stop', {method: 'POST'}).then(function(st) {
+    if (_stagingTimerInt) { clearInterval(_stagingTimerInt); _stagingTimerInt = null; }
+    stagingShowError(st.error || 'Сканирование остановлено');
+  }).catch(function(e) { stagingShowError('Сетевая ошибка: ' + e); });
+}
+
+function pollStaging() {
+  setTimeout(function() {
+    stagingFetchJSON('/api/staging-tls/status').then(function(st) {
+      if (st.state === 'running') { stagingShowRunning(st); pollStaging(); }
+      else if (st.state === 'done' && st.fresh) { loadStagingData(); }
+      else if (st.state === 'error') { stagingShowError(st.error || 'Ошибка сканирования'); }
+      else { stagingShowIdle(); }
+    }).catch(function(e) { stagingShowError('Сетевая ошибка: ' + e); });
+  }, 1000);
+}
+
+function loadStagingData() {
+  stagingFetchJSON('/api/staging-tls/data').then(function(d) {
+    if (d.error) { stagingShowError(d.error); return; }
+    _stagingData = d;
+    stagingRender(d.report);
+    document.getElementById('stagingStartBtn').disabled = false;
+    document.getElementById('stagingStopBtn').disabled = true;
+  }).catch(function(e) { stagingShowError('Сетевая ошибка: ' + e); });
+}
+
+function stagingInit() {
+  stagingFetchJSON('/api/staging-tls/status').then(function(st) {
+    if (st.state === 'running') { stagingShowRunning(st); pollStaging(); }
+    else if (st.state === 'done' && st.fresh) { loadStagingData(); }
+    else { stagingShowIdle(); }
+  }).catch(function(e) { stagingShowError('Сетевая ошибка: ' + e); });
+}
+
+// ── Рендер отчёта ──
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function tlsBadgeHtml(ok) {
+  if (ok === true) return '<span class="badge badge-success">✓</span>';
+  if (ok === false) return '<span class="badge badge-danger">✗</span>';
+  return '<span class="badge badge-info">n/a</span>';
+}
+function protoBadgeHtml(p) {
+  const cls = p === 'https' ? 'badge-success' : (p === 'http' ? 'badge-warning' : ((p === 'tls' || p === 'tcp') ? 'badge-info' : ''));
+  return '<span class="badge ' + cls + '">' + esc(p || 'n/a') + '</span>';
+}
+function renderStagingIssueTable(title, icon, issues, cls, withWorkaround) {
+  if (!issues || !issues.length) return '';
+  let h = '<div class="card"><h4>' + icon + ' ' + title + '</h4><table class="table"><thead><tr>'
+    + '<th>Категория</th><th>Сервер</th><th>Проблема</th>' + (withWorkaround ? '<th>Обходной путь</th>' : '')
+    + '</tr></thead><tbody>';
+  issues.forEach(function(i) {
+    h += '<tr class="' + cls + '"><td>' + esc(i.category) + '</td><td>' + esc(i.server || '') + '</td><td>'
+      + esc(i.message) + '</td>' + (withWorkaround ? '<td>' + esc(i.workaround || '') + '</td>' : '') + '</tr>';
+  });
+  h += '</tbody></table></div>';
+  return h;
+}
+function renderServerScanCard(s) {
+  let h = '<div class="card"><h5>🖥 ' + esc(s.ServerName || '?') + ' <small>(' + esc([s.IP, s.OS, s.Engine].filter(Boolean).join(' · ')) + ')</small></h5>';
+  if (s.Error) h += '<div class="alert alert-warning">⚠️ ' + esc(s.Error) + '</div>';
+  const ng = s.Nginx || {};
+  if (ng.Installed) {
+    h += '<p><strong>nginx:</strong> ' + (ng.Running ? '<span class="badge badge-success">запущен</span>' : '<span class="badge badge-danger">не запущен</span>');
+    if (ng.ConfigPath) h += ' · конфиг: <code>' + esc(ng.ConfigPath) + '</code>';
+    if (ng.SSLProtocols && ng.SSLProtocols.length) h += ' · ssl_protocols: <code>' + esc(ng.SSLProtocols.join('; ')) + '</code>';
+    if (ng.ListenSSL && ng.ListenSSL.length) h += ' · listen ssl: ' + esc(ng.ListenSSL.join(', '));
+    h += '</p>';
+    (ng.Issues || []).forEach(function(iss) { h += '<div class="text-danger">• ' + esc(iss) + '</div>'; });
+  }
+  if (s.DockerPorts && s.DockerPorts.length) h += '<p><strong>Docker:</strong> опубликованные порты: ' + esc(s.DockerPorts.join(', ')) + '</p>';
+  const ports = s.Ports || [];
+  if (ports.length) {
+    h += '<table class="table"><thead><tr><th>Порт</th><th>Протокол</th><th>TLS 1.0</th><th>TLS 1.1</th><th>TLS 1.2</th><th>TLS 1.3</th><th>Cipher</th></tr></thead><tbody>';
+    ports.forEach(function(p) {
+      const v = p.Versions || {};
+      h += '<tr><td>' + p.Port + '</td><td>' + protoBadgeHtml(p.Protocol) + '</td>'
+        + '<td>' + tlsBadgeHtml(v['TLS 1.0']) + '</td><td>' + tlsBadgeHtml(v['TLS 1.1']) + '</td>'
+        + '<td>' + tlsBadgeHtml(v['TLS 1.2']) + '</td><td>' + tlsBadgeHtml(v['TLS 1.3']) + '</td>'
+        + '<td>' + (p.WeakCiphers && p.WeakCiphers.length ? '<span class="text-danger">' + esc(p.WeakCiphers.join(', ')) + '</span>' : '') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function stagingRender(r) {
+  if (_stagingTimerInt) { clearInterval(_stagingTimerInt); _stagingTimerInt = null; }
+  document.getElementById('staging-status-card').style.display = 'none';
+  document.getElementById('staging-error').style.display = 'none';
+  document.getElementById('stagingPdfBtn').disabled = false;
+
+  const critical = (r.issues || []).filter(function(i) { return i.severity === 'critical'; });
+  const workaround = (r.issues || []).filter(function(i) { return i.severity === 'workaround'; });
+  const recommend = (r.issues || []).filter(function(i) { return i.severity !== 'critical' && i.severity !== 'workaround'; });
+  const st = r.stats || {};
+
+  // ── Карточки статистики ──
+  let html = '<div class="grid grid-2">';
+  html += '<div class="card stat-card"><div class="stat-value">'
+    + (r.ready ? '<span class="badge badge-success">ГОТОВО</span>' : '<span class="badge badge-danger">НЕ ГОТОВО</span>')
+    + '</div><div class="stat-label">Вердикт: TLS 1.3 в PROD</div></div>';
+  html += '<div class="card stat-card"><div class="stat-value">' + (r.prod || []).length + '</div><div class="stat-label">PROD-серверов проверено</div></div>';
+  html += '</div>';
+
+  // ── Статистика по серверам ──
+  html += '<div class="grid grid-2">';
+  html += '<div class="card"><h4>📊 Статистика по серверам</h4><table class="table"><tbody>'
+    + '<tr><td>Всего серверов</td><td><strong>' + (st.total_servers || 0) + '</strong></td></tr>'
+    + '<tr><td>Успешно отсканировано</td><td><strong>' + (st.scanned_ok || 0) + '</strong></td></tr>'
+    + '<tr><td>Ошибки сканирования</td><td><strong>' + (st.scan_errors || 0) + '</strong></td></tr>'
+    + '<tr><td>TLS 1.3 поддерживают</td><td><strong>' + (st.tls13_servers || 0) + '</strong></td></tr>'
+    + '<tr><td>Только TLS 1.2</td><td><strong>' + (st.tls12_only || 0) + '</strong></td></tr>'
+    + '<tr><td>Только HTTP (без TLS)</td><td><strong>' + (st.http_only || 0) + '</strong></td></tr>'
+    + '<tr><td>Фронтовых nginx</td><td><strong>' + (st.nginx_servers || 0) + '</strong></td></tr>'
+    + '<tr><td>Бэкендов за nginx (NAT)</td><td><strong>' + (st.backend_servers || 0) + '</strong></td></tr>'
+    + '<tr><td>IIS-бэкендов</td><td><strong>' + (st.iis_backends || 0) + '</strong></td></tr>'
+    + '</tbody></table></div>';
+
+  // ── Статистика по портам ──
+  html += '<div class="card"><h4>🔌 Статистика по портам</h4><table class="table"><tbody>'
+    + '<tr><td>Всего портов проверено</td><td><strong>' + (st.total_ports || 0) + '</strong></td></tr>'
+    + '<tr><td>Портов с TLS 1.3</td><td><strong>' + (st.tls13_ports || 0) + '</strong></td></tr>'
+    + '<tr><td>Портов с TLS 1.2</td><td><strong>' + (st.tls12_ports || 0) + '</strong></td></tr>'
+    + '<tr><td>Портов HTTP (без TLS)</td><td><strong>' + (st.http_ports || 0) + '</strong></td></tr>'
+    + '<tr><td>Слабые cipher suites</td><td><strong>' + (st.weak_cipher_ports || 0) + '</strong></td></tr>'
+    + '</tbody></table></div>';
+  html += '<div class="card"><h4>🐳 Docker-образы</h4><table class="table"><tbody>'
+    + '<tr><td>Всего образов</td><td><strong>' + (st.docker_images_total || 0) + '</strong></td></tr>'
+    + '<tr><td>Расхождений digest</td><td><strong>' + (st.docker_images_mismatch || 0) + '</strong></td></tr>'
+    + '</tbody></table></div>';
+  html += '</div>';
+
+  // ── Статистика проблем и тестов ──
+  html += '<div class="grid grid-2">';
+  html += '<div class="card"><h4>🚨 Проблемы</h4><table class="table"><tbody>'
+    + '<tr class="row-critical"><td>🔴 Критические</td><td><strong>' + (st.critical_count || 0) + '</strong></td></tr>'
+    + '<tr class="row-warning"><td>🟠 С обходными путями</td><td><strong>' + (st.workaround_count || 0) + '</strong></td></tr>'
+    + '<tr><td>💡 Рекомендации</td><td><strong>' + (st.recommend_count || 0) + '</strong></td></tr>'
+    + '</tbody></table></div>';
+  html += '<div class="card"><h4>⚡ Нагрузочный тест</h4><table class="table"><tbody>'
+    + '<tr><td>Всего тестов</td><td><strong>' + (st.load_test_total || 0) + '</strong></td></tr>'
+    + '<tr><td>Успешно</td><td><strong>' + (st.load_test_ok || 0) + '</strong></td></tr>'
+    + '<tr><td>Провалено</td><td><strong>' + (st.load_test_fail || 0) + '</strong></td></tr>'
+    + '</tbody></table></div>';
+  html += '</div>';
+
+  // ── Заключение (построчно) ──
+  html += '<div class="card"><h4>📋 Заключение</h4>';
+  var sumLines = (r.summary || '').split('\n');
+  sumLines.forEach(function(line) { if (line.trim()) html += '<p>' + esc(line) + '</p>'; });
+  html += '<p class="muted">Сгенерировано: ' + esc(r.generated_at || '') + ' · PROD: ' + esc((r.prod_names || []).join(', ')) + '</p></div>';
+
+  if (r.server_error) {
+    html += '<div class="alert alert-danger">⚠️ ' + esc(r.server_error) + '</div>';
+  }
+
+  // ── Сводная таблица серверов ──
+  if ((r.prod || []).length) {
+    html += '<div class="card"><h4>🖥 Сводная таблица PROD-серверов</h4><table class="table"><thead><tr>'
+      + '<th>Сервер</th><th>IP</th><th>OS</th><th>TLS 1.3</th><th>TLS 1.2</th><th>HTTP</th><th>nginx</th><th>Портов</th><th>Статус</th>'
+      + '</tr></thead><tbody>';
+    r.prod.forEach(function(s) {
+      var has13 = false, has12 = false, hasHTTP = false, portCnt = (s.Ports || []).length;
+      (s.Ports || []).forEach(function(p) {
+        if (p.Versions && p.Versions['TLS 1.3']) has13 = true;
+        if (p.Versions && p.Versions['TLS 1.2']) has12 = true;
+        if (p.Protocol === 'http') hasHTTP = true;
+      });
+      var ng = s.Nginx || {};
+      var status = s.Error ? '<span class="badge badge-danger">ошибка</span>' : (has13 ? '<span class="badge badge-success">OK</span>' : '<span class="badge badge-warning">нет TLS 1.3</span>');
+      html += '<tr><td>' + esc(s.ServerName || '?') + '</td><td>' + esc(s.IP || '') + '</td><td>' + esc(s.OS || '') + '</td>'
+        + '<td>' + (has13 ? '<span class="badge badge-success">✓</span>' : '<span class="badge badge-danger">✗</span>') + '</td>'
+        + '<td>' + (has12 ? '<span class="badge badge-success">✓</span>' : '<span class="badge badge-danger">✗</span>') + '</td>'
+        + '<td>' + (hasHTTP ? '<span class="badge badge-warning">HTTP</span>' : '—') + '</td>'
+        + '<td>' + (ng.Installed ? '<span class="badge badge-info">nginx</span>' : '—') + '</td>'
+        + '<td>' + portCnt + '</td><td>' + status + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  html += renderStagingIssueTable('Критические проблемы (блокируют TLS 1.3 в PROD)', '🔴', critical, 'row-critical', false);
+  html += renderStagingIssueTable('Критические с обходными путями', '🟠', workaround, 'row-warning', true);
+  html += renderStagingIssueTable('Рекомендации', '💡', recommend, '', false);
+
+  if (r.versions && r.versions.length) {
+    html += '<div class="card"><h4>🧩 Версии ПО PROD-серверов</h4><table class="table"><thead><tr>'
+      + '<th>Сервер</th><th>OS</th><th>Kernel</th><th>Docker</th><th>Nginx</th><th>OpenSSL</th><th>Java</th><th>Node</th></tr></thead><tbody>';
+    r.versions.forEach(function(v) {
+      html += '<tr><td>' + esc(v.server_name) + '</td><td>' + esc(v.os_version) + '</td><td>' + esc(v.kernel) + '</td><td>'
+        + esc(v.docker) + '</td><td>' + esc(v.nginx) + '</td><td>' + esc(v.openssl) + '</td><td>' + esc(v.java) + '</td><td>' + esc(v.node) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (r.load_tests && r.load_tests.length) {
+    html += '<div class="card"><h4>⚡ Нагрузочный тест TLS 1.3</h4><table class="table"><thead><tr>'
+      + '<th>Сервер</th><th>IP:Port</th><th>Соединений</th><th>Успешно</th><th>Ошибок</th><th>Среднее</th><th>p50</th><th>p95</th><th>p99</th><th>Мин</th><th>Макс</th><th>RPS</th></tr></thead><tbody>';
+    r.load_tests.forEach(function(lt) {
+      html += '<tr><td>' + esc(lt.server) + '</td><td>' + esc(lt.ip) + ':' + lt.port + '</td><td>' + lt.connections + '</td><td>'
+        + lt.success + '</td><td>' + lt.failed + '</td><td>' + (lt.avg_ms || 0).toFixed(1) + ' ms</td><td>'
+        + (lt.p50_ms || 0).toFixed(1) + ' ms</td><td>' + (lt.p95_ms || 0).toFixed(1) + ' ms</td><td>'
+        + (lt.p99_ms || 0).toFixed(1) + ' ms</td><td>' + (lt.min_ms || 0).toFixed(1) + ' ms</td><td>'
+        + (lt.max_ms || 0).toFixed(1) + ' ms</td><td>' + (lt.rps || 0).toFixed(1) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<p class="muted">Перцентили p50/p95/p99 и RPS (рукопожатий/сек) — пункт 49 IMPROVEMENTS.md.</p></div>';
+  }
+
+  // Пункт 48: Docker-образы и их идентичность между PROD-серверами.
+  if (r.versions && r.versions.some(function(v) { return v.docker_images && v.docker_images.length; })) {
+    html += '<div class="card"><h4>🐳 Docker-образы PROD-серверов</h4><table class="table"><thead><tr>'
+      + '<th>Образ</th><th>Тег</th><th>Digest</th><th>Серверы</th></tr></thead><tbody>';
+    // Собираем образы по repo:tag.
+    var imgMap = {};
+    r.versions.forEach(function(v) {
+      (v.docker_images || []).forEach(function(img) {
+        var key = (img.repository || '') + ':' + (img.tag || '<none>');
+        if (!imgMap[key]) imgMap[key] = {repo: img.repository, tag: img.tag, digests: {}};
+        if (!imgMap[key].digests[img.digest || '']) imgMap[key].digests[img.digest || ''] = [];
+        imgMap[key].digests[img.digest || ''].push(v.server_name);
+      });
+    });
+    Object.keys(imgMap).sort().forEach(function(key) {
+      var img = imgMap[key];
+      var dkeys = Object.keys(img.digests);
+      var digHtml = '';
+      dkeys.forEach(function(d, i) {
+        var badge = dkeys.length > 1 ? 'badge-danger' : 'badge-success';
+        digHtml += '<span class="badge ' + badge + '">' + esc(d.substring(0, 20)) + '</span> ' + esc(img.digests[d].join(', ')) + '<br>';
+      });
+      html += '<tr><td>' + esc(img.repo) + '</td><td>' + esc(img.tag) + '</td><td>' + digHtml + '</td><td>'
+        + Object.keys(img.digests).reduce(function(acc, d) { return acc.concat(img.digests[d]); }, []).length + ' серверов</td></tr>';
+    });
+    html += '</tbody></table>';
+    if ((st.docker_images_mismatch || 0) > 0) {
+      html += '<div class="alert alert-danger">⚠️ Обнаружено ' + st.docker_images_mismatch + ' образов с расхождением digest — версии контейнеров рассинхронизированы.</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '<h4>🏭 PROD-серверы — детальная проверка TLS/HTTP</h4>';
+  if ((r.prod || []).length) {
+    r.prod.forEach(function(s) { html += renderServerScanCard(s); });
+  } else {
+    html += '<div class="alert alert-warning">PROD-серверы не найдены. Проверьте имена серверов в ServerCore.</div>';
+  }
+
+  document.getElementById('staging-results').innerHTML = html;
+}
+
+// ── Экспорт в PDF (шрифт DejaVu с кириллицей) ──
+function exportStagingPDF() {
+  const d = _stagingData;
+  if (!d || !d.report) { alert('Результаты ещё не готовы.'); return; }
+  if (typeof window.jspdf === 'undefined') { alert('jsPDF не загрузился.'); return; }
+  const report = d.report;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const now = new Date();
+
+  loadPdfFont(doc, 'DejaVu').then(function() {
+    doc.setFontSize(16); doc.setTextColor(15, 20, 25);
+    doc.text('Staging-TLS Audit — проверка готовности PROD к TLS 1.3', 40, 40);
+    doc.setFontSize(9); doc.setTextColor(120, 130, 140);
+    doc.text('Сгенерировано: ' + now.toLocaleString('ru-RU'), 40, 56);
+    doc.setFontSize(12); doc.setTextColor(15, 20, 25);
+    doc.text('Заключение: ' + (report.ready ? 'ГОТОВО' : 'НЕ ГОТОВО'), 40, 74);
+    doc.setFontSize(9); doc.setTextColor(60, 70, 80);
+
+    // Summary построчно
+    let y = 88;
+    var sumLines = (report.summary || '').split('\n');
+    sumLines.forEach(function(line) {
+      if (!line.trim()) return;
+      const sl = doc.splitTextToSize(line, pageW - 80);
+      doc.text(sl, 40, y);
+      y += sl.length * 11;
+    });
+    y += 10;
+
+    // Статистика по серверам
+    const st = report.stats || {};
+    if (st.total_servers !== undefined) {
+      if (y > doc.internal.pageSize.getHeight() - 100) { doc.addPage(); y = 40; }
+      doc.setFontSize(11); doc.setTextColor(15, 20, 25);
+      doc.text('Статистика', 40, y); y += 14;
+      doc.setFontSize(8); doc.setTextColor(60, 70, 80);
+      doc.autoTable({
+        startY: y,
+        head: [['Показатель', 'Значение']],
+        body: [
+          ['Всего серверов', st.total_servers || 0],
+          ['Успешно отсканировано', st.scanned_ok || 0],
+          ['Ошибки сканирования', st.scan_errors || 0],
+          ['TLS 1.3 поддерживают', st.tls13_servers || 0],
+          ['Только TLS 1.2', st.tls12_only || 0],
+          ['Только HTTP', st.http_only || 0],
+          ['Фронтовых nginx', st.nginx_servers || 0],
+          ['Бэкендов за nginx (NAT)', st.backend_servers || 0],
+          ['IIS-бэкендов', st.iis_backends || 0],
+          ['Всего портов', st.total_ports || 0],
+          ['Портов TLS 1.3', st.tls13_ports || 0],
+          ['Портов TLS 1.2', st.tls12_ports || 0],
+          ['Портов HTTP', st.http_ports || 0],
+          ['Слабые cipher suites', st.weak_cipher_ports || 0],
+          ['Критические проблемы', st.critical_count || 0],
+          ['С обходными путями', st.workaround_count || 0],
+          ['Рекомендации', st.recommend_count || 0],
+          ['Нагрузочных тестов (успешно)', (st.load_test_ok || 0) + '/' + (st.load_test_total || 0)],
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [36, 52, 71], textColor: 255, fontSize: 8, font: 'DejaVu' },
+        bodyStyles: { fontSize: 8, textColor: [40, 50, 60], font: 'DejaVu' },
+        columnStyles: { 0: { cellWidth: 200 }, 1: { cellWidth: 80 } },
+        margin: { left: 40, right: 40 },
+      });
+      y = doc.lastAutoTable.finalY + 14;
+    }
+
+    // Сводная таблица серверов
+    if ((report.prod || []).length) {
+      if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 40; }
+      doc.setFontSize(11); doc.setTextColor(15, 20, 25);
+      doc.text('Сводная таблица PROD-серверов', 40, y); y += 14;
+      const srows = [];
+      report.prod.forEach(function(s) {
+        var has13 = false, has12 = false, hasHTTP = false;
+        (s.Ports || []).forEach(function(p) {
+          if (p.Versions && p.Versions['TLS 1.3']) has13 = true;
+          if (p.Versions && p.Versions['TLS 1.2']) has12 = true;
+          if (p.Protocol === 'http') hasHTTP = true;
+        });
+        srows.push([
+          s.ServerName || '?', s.IP || '', s.OS || '',
+          has13 ? 'YES' : 'no', has12 ? 'YES' : 'no',
+          hasHTTP ? 'HTTP' : '-', (s.Nginx && s.Nginx.Installed) ? 'nginx' : '-',
+          String((s.Ports || []).length), s.Error ? 'error' : 'ok'
+        ]);
+      });
+      doc.autoTable({
+        startY: y,
+        head: [['Server', 'IP', 'OS', 'TLS1.3', 'TLS1.2', 'HTTP', 'nginx', 'Ports', 'Status']],
+        body: srows,
+        theme: 'grid',
+        headStyles: { fillColor: [36, 52, 71], textColor: 255, fontSize: 7, font: 'DejaVu' },
+        bodyStyles: { fontSize: 7, textColor: [40, 50, 60], font: 'DejaVu' },
+        margin: { left: 40, right: 40 },
+      });
+      y = doc.lastAutoTable.finalY + 14;
+    }
+
+    // Проблемы
+    (report.issues || []).forEach(function(i) {
+      if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 40; }
+      doc.setFontSize(8); doc.setTextColor(60, 70, 80);
+      const sev = i.severity === 'critical' ? '🔴' : (i.severity === 'workaround' ? '🟠' : '💡');
+      const lines = doc.splitTextToSize(sev + ' [' + i.category + '] ' + (i.server || '') + ': ' + i.message, pageW - 80);
+      doc.text(lines, 44, y);
+      y += lines.length * 10 + 2;
+    });
+
+    y += 8;
+    (report.load_tests || []).forEach(function(lt) {
+      if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 40; }
+      doc.setFontSize(9); doc.setTextColor(15, 20, 25);
+      doc.text('Load test TLS 1.3: ' + lt.server + ' ' + lt.ip + ':' + lt.port, 40, y);
+      doc.setFontSize(8); doc.setTextColor(60, 70, 80);
+      doc.text('ok=' + lt.success + '/' + lt.connections + ', avg=' + (lt.avg_ms || 0).toFixed(1) + ' ms, min=' + (lt.min_ms || 0).toFixed(1) + ', max=' + (lt.max_ms || 0).toFixed(1), 44, y + 12);
+      y += 24;
+    });
+
+    doc.setFontSize(8); doc.setTextColor(150, 160, 170);
+    const pages = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      doc.text('Paylater Monitor · Staging-TLS · Mikhail Gubin, DevOps · стр. ' + i + '/' + pages, 40, doc.internal.pageSize.getHeight() - 16);
+    }
+    doc.save('staging-tls-report-' + now.toISOString().slice(0, 10) + '.pdf');
+  }).catch(function(e) { alert('Не удалось загрузить шрифт для PDF: ' + e); });
+}
+
+document.addEventListener('DOMContentLoaded', stagingInit);
+</script>
+{{end}}

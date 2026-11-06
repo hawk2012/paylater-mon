@@ -1,0 +1,174 @@
+{{define "content"}}
+<h3>⚙️ Система</h3>
+
+{{if not .CanEdit}}
+<div class="alert alert-info">У вас нет прав администратора для изменения конфигурации. Только просмотр.</div>
+{{end}}
+
+<div class="card">
+  <h4>Состояние сервисов</h4>
+  <table class="table">
+    <thead><tr><th>Сервис</th><th>Статус</th></tr></thead>
+    <tbody>
+      <tr><td>ServerCore (Nova API)</td><td>{{if .MonitoringEnabled}}🟢 Подключён{{else}}🔴 Отключён{{end}}</td></tr>
+      <tr><td>Graylog</td><td>{{if .GraylogOk}}🟢 OK{{else}}—{{end}}</td></tr>
+      <tr><td>Zeebe (Prometheus)</td><td>{{if .ZeebeOk}}🟢 OK{{else}}—{{end}}</td></tr>
+      <tr><td>Vault</td><td>{{if .VaultOk}}🟢 OK{{else}}🔴 Отключён{{end}}</td></tr>
+      <tr><td>MS Teams</td><td>{{if .TeamsOk}}🟢 OK{{else}}—{{end}}</td></tr>
+      <tr><td>AI-диагностика</td><td>{{if .AiEnabled}}🟢 OK{{else}}🔴 Отключён{{end}}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{{if .CanEdit}}
+<div class="card">
+  <h4>Конфигурация (графический редактор)</h4>
+  <p class="muted">Изменения сохраняются в config.yaml и применяются без перезагрузки службы.</p>
+  <div id="configEditor"></div>
+  <div style="margin-top:10px">
+    <button class="btn btn-primary" onclick="saveConfig()">💾 Сохранить конфигурацию</button>
+    <button class="btn btn-warning" onclick="migrateSecrets()">🔐 Мигрировать секреты в Vault</button>
+  </div>
+  <div id="configResult" style="margin-top:10px"></div>
+</div>
+
+<script>
+// Текущая конфигурация из бэкенда (встраивается как JS-объект).
+var _cfg = {{.ConfigJSON}};
+
+function field(label, id, val, type) {
+  if (type === undefined) type = 'text';
+  return '<div class="form-inline" style="margin-bottom:4px"><label style="width:240px">'+label+'</label>' +
+    '<input class="input" id="'+id+'" value="'+(val==null?'':String(val).replace(/"/g,'&quot;'))+'" type="'+type+'"></div>';
+}
+function section(title) { return '<h4 style="margin-top:16px">'+title+'</h4>'; }
+
+function renderEditor() {
+  var h = '';
+  h += section('Сервер (панель)');
+  h += field('Listen addr', 'f_listen', _cfg.server.listen_addr);
+
+  h += section('ServerCore');
+  h += field('Enabled', 'f_sc_enabled', _cfg.servercore.enabled?'true':'false');
+  h += field('IAM Username', 'f_sc_user', _cfg.servercore.iam_username);
+  h += field('IAM Password', 'f_sc_pass', _cfg.servercore.iam_password, 'password');
+  h += field('IAM Domain', 'f_sc_domain', _cfg.servercore.iam_domain_name);
+  h += field('IAM Project ID', 'f_sc_proj', _cfg.servercore.iam_project_id);
+  h += field('SSH Port', 'f_sc_sshport', _cfg.servercore.ssh_port, 'number');
+  h += field('SSH Username', 'f_sc_sshuser', _cfg.servercore.ssh_username);
+  h += field('SSH Private Key Path', 'f_sc_keypath', _cfg.servercore.ssh_private_key_path);
+  h += '<div class="form-inline" style="margin-bottom:4px"><label style="width:240px">Выведены из эксплуатации (через запятую)</label>' +
+    '<input class="input" id="f_sc_excluded" style="width:400px" value="'+(_cfg.servercore.excluded_servers||[]).join(', ')+'"></div>';
+  h += '<div class="form-inline" style="margin-bottom:4px"><label style="width:240px">Группы серверов (имя:шаблон:монитор)</label>' +
+    '<input class="input" id="f_sc_groups" style="width:400px" value="'+(_cfg.servercore.server_groups||[]).map(function(g){return g.name+':'+g.pattern+':'+(g.monitored?'1':'0')}).join(', ')+'"></div>';
+
+  h += section('Graylog');
+  h += field('API Port', 'f_gl_port', _cfg.graylog.api_port, 'number');
+  h += field('PROD Username', 'f_gl_pu', _cfg.graylog.prod.username);
+  h += field('PROD Password', 'f_gl_pp', _cfg.graylog.prod.password, 'password');
+  h += field('TEST Username', 'f_gl_tu', _cfg.graylog.test.username);
+  h += field('TEST Password', 'f_gl_tp', _cfg.graylog.test.password, 'password');
+
+  h += section('Zeebe');
+  h += field('URL', 'f_zb_url', _cfg.zeebe.url);
+  h += field('PROD URL', 'f_zb_prod', _cfg.zeebe.prod_url);
+  h += field('TEST URL', 'f_zb_test', _cfg.zeebe.test_url);
+  h += field('Operate Port', 'f_zb_op', _cfg.zeebe.operate_port, 'number');
+  h += field('Stuck threshold (hours)', 'f_zb_stuck', _cfg.zeebe.stuck_threshold_hours, 'number');
+
+  h += section('MS Teams');
+  h += field('Webhook URL', 'f_ms_wh', _cfg.msteams.webhook_url);
+
+  h += section('Vault');
+  h += field('Enabled', 'f_v_en', _cfg.vault.enabled?'true':'false');
+  h += field('API Base', 'f_v_base', _cfg.vault.api_base);
+  h += field('Root Token', 'f_v_tok', _cfg.vault.root_token, 'password');
+  h += field('KV1 Path', 'f_v_kv1', _cfg.vault.kv1_path);
+  h += field('KV2 Path', 'f_v_kv2', _cfg.vault.kv2_path);
+
+  h += section('AI-диагностика');
+  h += field('Enabled', 'f_ai_en', _cfg.ai_diagnostics.enabled?'true':'false');
+  h += field('ChatGPT Enabled', 'f_ai_gpt', _cfg.ai_diagnostics.chatgpt_enabled?'true':'false');
+  h += field('ChatGPT API Key', 'f_ai_key', _cfg.ai_diagnostics.chatgpt_api_key, 'password');
+  h += field('ChatGPT API Base', 'f_ai_base', _cfg.ai_diagnostics.chatgpt_api_base);
+  h += field('Selected Provider', 'f_ai_prov', _cfg.ai_diagnostics.selected_provider);
+  h += field('Selected Model', 'f_ai_model', _cfg.ai_diagnostics.selected_model);
+  h += field('CLI Path', 'f_ai_cli', _cfg.ai_diagnostics.cli_path);
+  h += field('Auto-resolve', 'f_ai_ar', _cfg.ai_diagnostics.auto_resolve?'true':'false');
+
+  h += section('Auth');
+  h += field('Enabled', 'f_auth_en', _cfg.auth.enabled?'true':'false');
+  h += field('Username', 'f_auth_u', _cfg.auth.username);
+  h += field('Password', 'f_auth_p', _cfg.auth.password, 'password');
+
+  document.getElementById('configEditor').innerHTML = h;
+}
+renderEditor();
+
+function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
+function boolVal(id) { return val(id).toLowerCase() === 'true'; }
+function numVal(id) { var n = parseInt(val(id)); return isNaN(n) ? 0 : n; }
+
+function collectConfig() {
+  return {
+    server: { listen_addr: val('f_listen') },
+    servercore: {
+      enabled: boolVal('f_sc_enabled'), api_base: _cfg.servercore.api_base,
+      iam_username: val('f_sc_user'), iam_password: val('f_sc_pass'),
+      iam_domain_name: val('f_sc_domain'), iam_project_id: val('f_sc_proj'),
+      ssh_port: numVal('f_sc_sshport'), ssh_username: val('f_sc_sshuser'),
+      ssh_private_key_path: val('f_sc_keypath'), api_token: _cfg.servercore.api_token,
+      excluded_servers: val('f_sc_excluded').split(',').map(function(s){return s.trim()}).filter(function(s){return s}),
+      server_groups: val('f_sc_groups').split(',').map(function(s){var p=s.trim().split(':');return p.length>=3?{name:p[0],pattern:p[1],monitored:p[2]==='1'}:null}).filter(function(g){return g})
+    },
+    graylog: {
+      api_port: numVal('f_gl_port'),
+      prod: { url: _cfg.graylog.prod.url, username: val('f_gl_pu'), password: val('f_gl_pp') },
+      test: { url: _cfg.graylog.test.url, username: val('f_gl_tu'), password: val('f_gl_tp') }
+    },
+    zeebe: {
+      url: val('f_zb_url'), prod_url: val('f_zb_prod'), test_url: val('f_zb_test'),
+      operate_port: numVal('f_zb_op'), stuck_threshold_hours: numVal('f_zb_stuck')
+    },
+    msteams: { webhook_url: val('f_ms_wh') },
+    vault: {
+      enabled: boolVal('f_v_en'), api_base: val('f_v_base'), root_token: val('f_v_tok'),
+      use_root_token: _cfg.vault.use_root_token, kv1_path: val('f_v_kv1'), kv2_path: val('f_v_kv2'),
+      cache_ttl_minutes: _cfg.vault.cache_ttl_minutes
+    },
+    ai_diagnostics: {
+      enabled: boolVal('f_ai_en'), chatgpt_enabled: boolVal('f_ai_gpt'),
+      chatgpt_api_key: val('f_ai_key'), chatgpt_api_base: val('f_ai_base'),
+      selected_provider: val('f_ai_prov'), selected_model: val('f_ai_model'),
+      cli_path: val('f_ai_cli'), auto_resolve: boolVal('f_ai_ar')
+    },
+    auth: { enabled: boolVal('f_auth_en'), username: val('f_auth_u'), password: val('f_auth_p') },
+    docker: _cfg.docker, disk: _cfg.disk,
+    ephemeral_access: _cfg.ephemeral_access, container_diagnostics: _cfg.container_diagnostics,
+    automation: _cfg.automation, secret_refs: _cfg.secret_refs
+  };
+}
+
+function saveConfig() {
+  if (!confirm('Сохранить конфигурацию и применить без перезапуска?')) return;
+  postJSON('/api/config/update', {config: collectConfig()}, function(r) {
+    var box = document.getElementById('configResult');
+    box.innerHTML = r.success
+      ? '<div class="alert alert-success">✅ ' + r.message + '</div>'
+      : '<div class="alert alert-danger">❌ ' + (r.error || r.message || 'Ошибка') + '</div>';
+  });
+}
+
+function migrateSecrets() {
+  if (!confirm('Перенести секретные значения (пароли, токены) из config.yaml в Vault? Файл будет обновлён на ссылки vault:key.')) return;
+  postJSON('/api/secrets/migrate', {}, function(r) {
+    var box = document.getElementById('configResult');
+    box.innerHTML = r.success
+      ? '<div class="alert alert-success">✅ ' + r.message + '</div>'
+      : '<div class="alert alert-danger">❌ ' + (r.error || r.message || 'Ошибка') + '</div>';
+    if (r.success) setTimeout(function() { location.reload(); }, 2000);
+  });
+}
+</script>
+{{end}}
+{{end}}

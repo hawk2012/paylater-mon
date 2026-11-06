@@ -1,0 +1,60 @@
+{{define "content"}}
+<h3>📋 Активные инстансы процессов</h3>
+{{if .Active}}
+<table class="table">
+  <thead><tr><th>Key</th><th>BPMN Process ID</th><th>Версия</th><th>State</th><th>Start</th><th>Incident</th></tr></thead>
+  <tbody>
+  {{range .Active}}
+    <tr>
+      <td>{{.Key}}</td>
+      <td>{{.BpmnProcessID}}</td>
+      <td>{{.ProcessVersion}}</td>
+      <td>{{.State}}</td>
+      <td>{{.StartDate.Format "2006-01-02 15:04"}}</td>
+      <td>{{if .HasIncident}}<span class="badge badge-danger">YES</span>{{else}}—{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-info">Нет активных инстансов.</div>
+{{end}}
+
+<h3>🚨 Инстансы с инцидентами</h3>
+{{if .Incidents}}
+<table class="table">
+  <thead><tr><th>Key</th><th>BPMN Process ID</th><th>State</th><th>Start</th></tr></thead>
+  <tbody>
+  {{range .Incidents}}
+    <tr class="row-critical">
+      <td>{{.Key}}</td>
+      <td>{{.BpmnProcessID}}</td>
+      <td>{{.State}}</td>
+      <td>{{.StartDate.Format "2006-01-02 15:04"}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-success">✅ Инцидентов нет.</div>
+{{end}}
+
+<h3>⏳ Зависшие инстансы</h3>
+{{if .Stuck}}
+<table class="table">
+  <thead><tr><th>Key</th><th>BPMN Process ID</th><th>State</th><th>Длительность</th></tr></thead>
+  <tbody>
+  {{range .Stuck}}
+    <tr class="row-warning">
+      <td>{{.Key}}</td>
+      <td>{{.BpmnProcessID}}</td>
+      <td>{{.State}}</td>
+      <td>{{.RunningDurationFormatted}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="alert alert-success">✅ Зависших инстансов нет.</div>
+{{end}}
+{{end}}

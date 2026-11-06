@@ -1,0 +1,567 @@
+{{define "content"}}
+<h3>🛠 Конструктор скриптов</h3>
+<p class="muted">Выберите язык и нужные модули — сгенерируется готовый скрипт. Пункт 60 IMPROVEMENTS.md.</p>
+
+<div class="card">
+  <label>Язык скрипта:</label>
+  <select id="sbLang" class="input" style="max-width:260px;">
+    <option value="bash">Bash (Linux)</option>
+    <option value="powershell">PowerShell (Windows)</option>
+    <option value="ansible">Ansible (YAML)</option>
+    <option value="terraform">Terraform (HCL)</option>
+  </select>
+</div>
+
+<div class="card" id="sbModules"></div>
+
+<div class="card">
+  <h4>Параметры (заполняются в сгенерированном скрипте)</h4>
+  <div id="sbParams" class="grid grid-3"></div>
+</div>
+
+<div class="card">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <h4 style="margin:0 12px 0 0;">Сгенерированный скрипт</h4>
+    <button class="btn btn-sm" onclick="sbCopy()">📋 Копировать</button>
+    <button class="btn btn-sm" onclick="sbDownload()">⬇ Скачать</button>
+  </div>
+  <pre id="sbOutput" class="code" style="white-space:pre-wrap;"></pre>
+</div>
+
+<script>
+// ===== Модули конструктора =====
+const SB_MODULES = {
+  bash: [
+    {id:'b_update', name:'Обновление ОС', icon:'🔁', tpl: function(p){return [
+      'echo ">> Обновление пакетов..."',
+      'apt-get update -y && apt-get upgrade -y',
+      'DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release software-properties-common',
+      ''
+    ].join('\n');}},
+    {id:'b_docker', name:'Docker Engine', icon:'🐳', tpl: function(p){return [
+      'echo ">> Установка Docker Engine..."',
+      'install -m 0755 -d /etc/apt/keyrings',
+      'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg',
+      'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
+      'apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin',
+      'systemctl enable --now docker',
+      ''
+    ].join('\n');}},
+    {id:'b_compose', name:'docker-compose.yml', icon:'🧩', tpl: function(p){return [
+      'echo ">> Развёртывание docker-compose..."',
+      'mkdir -p /etc/docker/compose',
+      'cat > /etc/docker/compose/docker-compose.yml <<\'EOF\'',
+      p.compose || 'version: "3.8"\nservices:\n  app:\n    image: nginx:latest\n    ports:\n      - "80:80"\n    restart: unless-stopped',
+      'EOF',
+      'cd /etc/docker/compose && docker compose up -d',
+      ''
+    ].join('\n');}},
+    {id:'b_nginx', name:'Nginx + конфиг', icon:'🌐', tpl: function(p){return [
+      'echo ">> Установка и настройка nginx..."',
+      'apt-get install -y nginx',
+      'mkdir -p /etc/nginx/sites-enabled /etc/nginx/conf.d',
+      'cat > /etc/nginx/conf.d/' + (p.server_name || 'server').replace(/[^a-zA-Z0-9._-]/g,'') + '.conf <<\'EOF\'',
+      'server {',
+      '    listen 80;',
+      '    server_name ' + (p.server_name || '_') + ';',
+      '    location / {',
+      '        proxy_pass http://127.0.0.1:' + (p.app_port || '8080') + ';',
+      '        proxy_set_header Host $host;',
+      '        proxy_set_header X-Real-IP $remote_addr;',
+      '    }',
+      '}',
+      'EOF',
+      'nginx -t && systemctl reload nginx',
+      ''
+    ].join('\n');}},
+    {id:'b_ssl', name:'SSL / Certbot (Let\u0027s Encrypt)', icon:'🔒', tpl: function(p){return [
+      'echo ">> Установка certbot и выпуск сертификата..."',
+      'apt-get install -y certbot python3-certbot-nginx',
+      'certbot --nginx -d ' + (p.server_name || 'example.com') + ' --non-interactive --agree-tos -m ' + (p.email || 'admin@example.com') + ' --redirect',
+      'systemctl enable --now certbot.timer',
+      ''
+    ].join('\n');}},
+    {id:'b_firewall', name:'Firewall (ufw)', icon:'🛡', tpl: function(p){return [
+      'echo ">> Настройка файрвола..."',
+      'ufw default deny incoming',
+      'ufw default allow outgoing',
+      'ufw allow ssh',
+      'ufw allow 80/tcp',
+      'ufw allow 443/tcp',
+      (p.app_port ? 'ufw allow ' + p.app_port + '/tcp\n' : '') +
+      'echo "y" | ufw enable',
+      ''
+    ].join('\n');}},
+    {id:'b_monitor', name:'Мониторинг node_exporter', icon:'📊', tpl: function(p){return [
+      'echo ">> Установка node_exporter (Prometheus)..."',
+      'apt-get install -y prometheus-node-exporter',
+      'systemctl enable --now prometheus-node-exporter',
+      'echo "node_exporter: http://$(hostname -I | awk \'{print $1}\'):9100/metrics"',
+      ''
+    ].join('\n');}},
+    {id:'b_fail2ban', name:'fail2ban', icon:'🚫', tpl: function(p){return [
+      'echo ">> Установка fail2ban..."',
+      'apt-get install -y fail2ban',
+      'cat > /etc/fail2ban/jail.local <<\'EOF\'',
+      '[sshd]',
+      'enabled = true',
+      'maxretry = 5',
+      'bantime = 3600',
+      'EOF',
+      'systemctl enable --now fail2ban',
+      ''
+    ].join('\n');}},
+    {id:'b_logrotate', name:'logrotate', icon:'🗂', tpl: function(p){return [
+      'echo ">> Настройка logrotate..."',
+      'cat > /etc/logrotate.d/app <<\'EOF\'',
+      '/var/log/app/*.log {',
+      '    daily',
+      '    rotate 14',
+      '    compress',
+      '    delaycompress',
+      '    missingok',
+      '    notifempty',
+      '}',
+      'EOF',
+      ''
+    ].join('\n');}},
+    {id:'b_systemd', name:'systemd unit (сервис)', icon:'⚙️', tpl: function(p){return [
+      'echo ">> Создание systemd-сервиса..."',
+      'cat > /etc/systemd/system/' + (p.svc || 'app') + '.service <<\'EOF\'',
+      '[Unit]',
+      'Description=' + (p.svc_desc || 'Application service') + '',
+      'After=network.target docker.service',
+      '',
+      '[Service]',
+      'Type=simple',
+      'WorkingDirectory=' + (p.svc_dir || '/opt/app') + '',
+      'ExecStart=' + (p.svc_cmd || '/usr/bin/app') + '',
+      'Restart=always',
+      'RestartSec=10',
+      '',
+      '[Install]',
+      'WantedBy=multi-user.target',
+      'EOF',
+      'systemctl daemon-reload && systemctl enable --now ' + (p.svc || 'app'),
+      ''
+    ].join('\n');}},
+    {id:'b_backup', name:'Бэкап БД + файлов', icon:'💾', tpl: function(p){return [
+      'echo ">> Настройка бэкапа..."',
+      'mkdir -p /opt/backups',
+      'cat > /etc/cron.d/app-backup <<\'EOF\'',
+      '0 3 * * * root tar czf /opt/backups/site-$(date +\\%F).tar.gz -C ' + (p.svc_dir || '/opt/app') + ' . && find /opt/backups -mtime +7 -delete',
+      'EOF',
+      'chmod 0644 /etc/cron.d/app-backup',
+      ''
+    ].join('\n');}},
+    {id:'b_camunda', name:'Camunda 8', icon:'☕', tpl: function(p){return [
+      'echo ">> Установка Camunda 8 (docker compose)..."',
+      'mkdir -p /opt/camunda && cat > /opt/camunda/docker-compose.yml <<\'EOF\'',
+      'version: "3.8"',
+      'services:',
+      '  zeebe:',
+      '    image: camunda/zeebe:' + (p.camunda_ver || '8.5.0') + '',
+      '    ports: ["26500:26500", "9600:9600"]',
+      '  operate:',
+      '    image: camunda/operate:' + (p.camunda_ver || '8.5.0') + '',
+      '    ports: ["8081:8080"]',
+      '    environment:',
+      '      - ZEEBE_GATEWAY_ADDRESS=zeebe:26500',
+      '  tasklist:',
+      '    image: camunda/tasklist:' + (p.camunda_ver || '8.5.0') + '',
+      '    ports: ["8082:8080"]',
+      'EOF',
+      'cd /opt/camunda && docker compose up -d',
+      ''
+    ].join('\n');}},
+    {id:'b_postgres', name:'PostgreSQL 16', icon:'🐘', tpl: function(p){return [
+      'echo ">> Установка PostgreSQL 16..."',
+      'apt-get install -y postgresql postgresql-contrib',
+      'systemctl enable --now postgresql',
+      'sudo -u postgres psql -c "CREATE USER ' + (p.pg_user || 'app') + ' WITH PASSWORD \'' + (p.pg_pass || 'ChangeMe123!') + '\';"',
+      'sudo -u postgres psql -c "CREATE DATABASE ' + (p.pg_db || 'app') + ' OWNER ' + (p.pg_user || 'app') + ';"',
+      ''
+    ].join('\n');}}
+  ],
+  powershell: [
+    {id:'w_update', name:'Обновление Windows', icon:'🔁', tpl: function(p){return [
+      '# Обновление Windows (Install-Module PSWindowsUpdate)',
+      'Import-Module PSWindowsUpdate -Force -ErrorAction SilentlyContinue',
+      'Install-WindowsUpdate -AcceptAll -AutoReboot -Verbose',
+      ''
+    ].join('\n');}},
+    {id:'w_iis', name:'IIS + сайт', icon:'🌐', tpl: function(p){return [
+      '# Установка IIS и создание сайта',
+      'Install-WindowsFeature -Name Web-Server, Web-WebSockets -IncludeManagementTools',
+      'New-Item -ItemType Directory -Force -Path C:\\inetpub\\wwwroot\\' + (p.server_name || 'site') + ' | Out-Null',
+      'Set-Content -Path C:\\inetpub\\wwwroot\\' + (p.server_name || 'site') + '\\index.html -Value "<h1>OK</h1>"',
+      'Import-Module WebAdministration',
+      'New-Website -Name ' + (p.server_name || 'site') + ' -Port ' + (p.app_port || '80') + ' -PhysicalPath C:\\inetpub\\wwwroot\\' + (p.server_name || 'site') + '',
+      ''
+    ].join('\n');}},
+    {id:'w_fw', name:'Firewall', icon:'🛡', tpl: function(p){return [
+      '# Правила файрвола',
+      'New-NetFirewallRule -DisplayName "HTTP" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow',
+      'New-NetFirewallRule -DisplayName "HTTPS" -Direction Inbound -Protocol TCP -LocalPort 443 -Action Allow',
+      (p.app_port ? 'New-NetFirewallRule -DisplayName "App ' + p.app_port + '" -Direction Inbound -Protocol TCP -LocalPort ' + p.app_port + ' -Action Allow\n' : '') +
+      ''
+    ].join('\n');}},
+    {id:'w_tasks', name:'Планировщик задач', icon:'⚙️', tpl: function(p){return [
+      '# Задача по расписанию',
+      '$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "' + (p.svc_cmd || '-Command Backup') + '"',
+      '$trigger = New-ScheduledTaskTrigger -Daily -At ' + (p.task_time || '03:00') + '',
+      'Register-ScheduledTask -TaskName "AppBackup" -Action $action -Trigger $trigger -Force',
+      ''
+    ].join('\n');}},
+    {id:'w_monitor', name:'Мониторинг (perf counter)', icon:'📊', tpl: function(p){return [
+      '# Сбор счётчиков производительности',
+      'Get-Counter "\\Processor(_Total)\\% Processor Time", "\\Memory\\Available MBytes" -SampleInterval 1 -MaxSamples 5',
+      ''
+    ].join('\n');}}
+  ],
+  ansible: [
+    {id:'a_play', name:'Playbook-каркас', icon:'📜', tpl: function(p){return [
+      '---',
+      '- name: ' + (p.svc_desc || 'Provision application server') + '',
+      '  hosts: ' + (p.hosts || 'all') + '',
+      '  become: true',
+      '  vars:',
+      '    server_name: ' + (p.server_name || 'example.com') + '',
+      '    app_port: ' + (p.app_port || '8080') + '',
+      '  tasks:'
+    ].join('\n');}},
+    {id:'a_update', name:'Обновление ОС', icon:'🔁', tpl: function(p){return [
+      '    - name: Update apt cache and packages',
+      '      apt:',
+      '        update_cache: true',
+      '        upgrade: dist',
+      '      when: ansible_os_family == "Debian"'
+    ].join('\n');}},
+    {id:'a_docker', name:'Установка Docker', icon:'🐳', tpl: function(p){return [
+      '    - name: Install Docker dependencies',
+      '      apt:',
+      '        name: [ca-certificates, curl, gnupg, lsb-release]',
+      '        state: present',
+      '      when: ansible_os_family == "Debian"',
+      '    - name: Add Docker apt key',
+      '      get_url:',
+      '        url: https://download.docker.com/linux/ubuntu/gpg',
+      '        dest: /etc/apt/keyrings/docker.asc',
+      '    - name: Add Docker repository',
+      '      apt_repository:',
+      '        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{"{{"}} ansible_distribution_release {{"}}"}} stable"',
+      '    - name: Install Docker',
+      '      apt:',
+      '        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]',
+      '        state: present',
+      '    - name: Ensure Docker started',
+      '      systemd:',
+      '        name: docker',
+      '        enabled: true',
+      '        state: started'
+    ].join('\n');}},
+    {id:'a_nginx', name:'Nginx site', icon:'🌐', tpl: function(p){return [
+      '    - name: Install nginx',
+      '      apt:',
+      '        name: nginx',
+      '        state: present',
+      '    - name: Deploy nginx config',
+      '      copy:',
+      '        content: |',
+      '          server {',
+      '              listen 80;',
+      '              server_name {{"{{"}} server_name {{"}}"}};',
+      '              location / { proxy_pass http://127.0.0.1:{{"{{"}} app_port {{"}}"}}; }',
+      '          }',
+      '        dest: /etc/nginx/conf.d/app.conf',
+      '      notify: reload nginx',
+      '  handlers:',
+      '    - name: reload nginx',
+      '      systemd:',
+      '        name: nginx',
+      '        state: reloaded'
+    ].join('\n');}},
+    {id:'a_ssl', name:'Certbot SSL', icon:'🔒', tpl: function(p){return [
+      '    - name: Install certbot',
+      '      apt:',
+      '        name: [certbot, python3-certbot-nginx]',
+      '        state: present',
+      '    - name: Obtain certificate',
+      '      command: certbot --nginx -d {{"{{"}} server_name {{"}}"}} --non-interactive --agree-tos -m ' + (p.email || 'admin@example.com') + ''
+    ].join('\n');}},
+    {id:'a_firewall', name:'UFW Firewall', icon:'🛡', tpl: function(p){return [
+      '    - name: Allow ports via ufw',
+      '      ufw:',
+      '        rule: allow',
+      '        port: "{{"{{"}} item {{"}}"}}"',
+      '        proto: tcp',
+      '      loop: [22, 80, 443]',
+      '    - name: Enable ufw',
+      '      ufw:',
+      '        state: enabled',
+      '        policy: deny'
+    ].join('\n');}},
+    {id:'a_compose', name:'docker-compose + up', icon:'🧩', tpl: function(p){return [
+      '    - name: Create compose dir',
+      '      file:',
+      '        path: /opt/app',
+      '        state: directory',
+      '    - name: Deploy docker-compose.yml',
+      '      copy:',
+      '        dest: /opt/app/docker-compose.yml',
+      '        content: |',
+      '          services:',
+      '            app:',
+      '              image: nginx:alpine',
+      '              ports:',
+      '                - "{{"{{"}} app_port {{"}}"}}:80"',
+      '              restart: unless-stopped',
+      '    - name: Start compose stack',
+      '      community.docker.docker_compose_v2:',
+      '        project_src: /opt/app',
+      '        state: present'
+    ].join('\n');}}
+  ],
+  terraform: [
+    {id:'t_provider', name:'Provider (OpenStack)', icon:'☁️', tpl: function(p){return [
+      'terraform {',
+      '  required_providers {',
+      '    openstack = {',
+      '      source = "terraform-provider-openstack/openstack"',
+      '      version = "~> 2.0"',
+      '    }',
+      '  }',
+      '}',
+      'provider "openstack" {',
+      '  auth_url = "' + (p.auth_url || 'https://keystone.example.com:5000/v3') + '"',
+      '  tenant_name = "' + (p.tenant || 'admin') + '"',
+      '  user_name = "' + (p.username || 'admin') + '"',
+      '  password = "' + (p.password || 'CHANGE_ME') + '"',
+      '  domain_name = "' + (p.domain || 'default') + '"',
+      '}',
+      ''
+    ].join('\n');}},
+    {id:'t_net', name:'Сеть + subnet', icon:'🌐', tpl: function(p){return [
+      'resource "openstack_networking_network_v2" "net" {',
+      '  name = "' + (p.net_name || 'app-net') + '"',
+      '}',
+      'resource "openstack_networking_subnet_v2" "subnet" {',
+      '  name = "' + (p.net_name || 'app-net') + '-subnet"',
+      '  network_id = openstack_networking_network_v2.net.id',
+      '  cidr = "' + (p.cidr || '192.168.100.0/24') + '"',
+      '  dns_nameservers = ["8.8.8.8", "1.1.1.1"]',
+      '}',
+      ''
+    ].join('\n');}},
+    {id:'t_sg', name:'Security Group', icon:'🛡', tpl: function(p){return [
+      'resource "openstack_networking_secgroup_v2" "sg" {',
+      '  name = "web-sg"',
+      '  description = "Web + SSH"',
+      '}',
+      'resource "openstack_networking_secgroup_rule_v2" "ssh" {',
+      '  security_group_id = openstack_networking_secgroup_v2.sg.id',
+      '  direction = "ingress"',
+      '  ethertype = "IPv4"',
+      '  protocol = "tcp"',
+      '  port_range_min = 22',
+      '  port_range_max = 22',
+      '  remote_ip_prefix = "0.0.0.0/0"',
+      '}',
+      'resource "openstack_networking_secgroup_rule_v2" "http" {',
+      '  security_group_id = openstack_networking_secgroup_v2.sg.id',
+      '  direction = "ingress"',
+      '  ethertype = "IPv4"',
+      '  protocol = "tcp"',
+      '  port_range_min = 80',
+      '  port_range_max = 80',
+      '  remote_ip_prefix = "0.0.0.0/0"',
+      '}',
+      ''
+    ].join('\n');}},
+    {id:'t_vm', name:'ВМ из образа', icon:'🖥', tpl: function(p){return [
+      'data "openstack_images_image_v2" "img" {',
+      '  name = "' + (p.os_image || 'ubuntu-22.04') + '"',
+      '  most_recent = true',
+      '}',
+      'resource "openstack_compute_flavor_v2" "flavor" {',
+      '  name = "' + (p.flavor || 'm1.medium') + '"',
+      '  ram = ' + (p.ram_mb || '4096') + '',
+      '  vcpus = ' + (p.cpu || '2') + '',
+      '  disk = ' + (p.disk_gb || '40') + '',
+      '}',
+      'resource "openstack_compute_instance_v2" "vm" {',
+      '  name = "' + (p.vm_name || 'app-1') + '"',
+      '  image_id = data.openstack_images_image_v2.img.id',
+      '  flavor_id = openstack_compute_flavor_v2.flavor.id',
+      '  security_groups = [openstack_networking_secgroup_v2.sg.name]',
+      '  network {',
+      '    uuid = openstack_networking_network_v2.net.id',
+      '  }',
+      '  key_pair = "' + (p.keypair || 'admin') + '"',
+      '  user_data = <<-EOF',
+      '    #!/bin/bash',
+      '    apt-get update -y && apt-get install -y nginx',
+      '  EOF',
+      '}',
+      ''
+    ].join('\n');}},
+    {id:'t_output', name:'Output', icon:'📤', tpl: function(p){return [
+      'output "vm_ip" {',
+      '  value = openstack_compute_instance_v2.vm.access_ip_v4',
+      '}',
+      'output "floating_ip" {',
+      '  value = openstack_networking_floatingip_associate_v2.assoc.floating_ip',
+      '}',
+      ''
+    ].join('\n');}}
+  ]
+};
+
+const SB_PARAMS = [
+  {id:'server_name', label:'Server name / hostname', def:'example.com'},
+  {id:'email', label:'Email (certbot)', def:'admin@example.com'},
+  {id:'app_port', label:'App port', def:'8080'},
+  {id:'compose', label:'docker-compose.yml (YAML)', def:'', area:true},
+  {id:'svc', label:'Systemd unit name', def:'app'},
+  {id:'svc_dir', label:'Working directory', def:'/opt/app'},
+  {id:'svc_cmd', label:'ExecStart command', def:'/usr/bin/app'},
+  {id:'svc_desc', label:'Service description', def:'Application service'},
+  {id:'pg_user', label:'Postgres user', def:'app'},
+  {id:'pg_pass', label:'Postgres password', def:'ChangeMe123!'},
+  {id:'pg_db', label:'Postgres DB', def:'app'},
+  {id:'camunda_ver', label:'Camunda version', def:'8.5.0'},
+  {id:'task_time', label:'Task time (HH:MM)', def:'03:00'},
+  {id:'hosts', label:'Ansible hosts', def:'all'},
+  {id:'auth_url', label:'Terraform auth_url', def:'https://keystone.example.com:5000/v3'},
+  {id:'tenant', label:'Terraform tenant', def:'admin'},
+  {id:'username', label:'Terraform username', def:'admin'},
+  {id:'password', label:'Terraform password', def:'CHANGE_ME'},
+  {id:'domain', label:'Terraform domain', def:'default'},
+  {id:'net_name', label:'Network name', def:'app-net'},
+  {id:'cidr', label:'Subnet CIDR', def:'192.168.100.0/24'},
+  {id:'os_image', label:'OS image', def:'ubuntu-22.04'},
+  {id:'flavor', label:'Flavor name', def:'m1.medium'},
+  {id:'ram_mb', label:'RAM (MB)', def:'4096'},
+  {id:'cpu', label:'vCPU', def:'2'},
+  {id:'disk_gb', label:'Disk (GB)', def:'40'},
+  {id:'vm_name', label:'VM name', def:'app-1'},
+  {id:'keypair', label:'Key pair', def:'admin'}
+];
+
+const SB_DEFAULTS = {
+  bash: ['b_update','b_docker','b_nginx','b_ssl','b_firewall','b_monitor','b_fail2ban'],
+  powershell: ['w_update','w_iis','w_fw'],
+  ansible: ['a_play','a_update','a_docker','a_nginx','a_firewall'],
+  terraform: ['t_provider','t_net','t_sg','t_vm','t_output']
+};
+
+let sbSelected = {};
+
+function sbRender() {
+  const lang = document.getElementById('sbLang').value;
+  const mods = SB_MODULES[lang] || [];
+  if (!sbSelected[lang]) sbSelected[lang] = {}; // сохраняем выбор per language
+
+  let html = '<h4>Модули (' + lang + ')</h4><div class="grid grid-3">';
+  mods.forEach(function(m) {
+    const checked = sbSelected[lang][m.id] ? ' checked' : '';
+    html += '<label class="sb-mod"><input type="checkbox" data-mod="' + m.id + '"' + checked + ' onchange="sbToggle(\'' + m.id + '\')"> ' + m.icon + ' ' + m.name + '</label>';
+  });
+  html += '</div>';
+  html += '<button class="btn btn-sm" onclick="sbAll(true)">Выбрать все</button> ';
+  html += '<button class="btn btn-sm" onclick="sbAll(false)">Сбросить</button> ';
+  html += '<button class="btn btn-sm btn-primary" onclick="sbGenerate()">Генерировать скрипт</button>';
+  document.getElementById('sbModules').innerHTML = html;
+
+  // Параметры
+  let ph = '';
+  SB_PARAMS.forEach(function(pp) {
+    if (pp.area) {
+      ph += '<div><label>' + pp.label + ':</label><textarea name="p_' + pp.id + '" class="input" rows="6">' + (pp.def || '') + '</textarea></div>';
+    } else {
+      ph += '<div><label>' + pp.label + ':</label><input name="p_' + pp.id + '" class="input" value="' + (pp.def || '') + '"></div>';
+    }
+  });
+  document.getElementById('sbParams').innerHTML = ph;
+}
+
+function sbToggle(id) {
+  const lang = document.getElementById('sbLang').value;
+  const cb = document.querySelector('[data-mod="' + id + '"]');
+  if (!cb) return;
+  sbSelected[lang][id] = cb.checked;
+}
+
+function sbAll(checked) {
+  const lang = document.getElementById('sbLang').value;
+  (SB_MODULES[lang] || []).forEach(function(m) {
+    sbSelected[lang][m.id] = checked;
+    const cb = document.querySelector('[data-mod="' + m.id + '"]');
+    if (cb) cb.checked = checked;
+  });
+}
+
+function sbParams() {
+  const p = {};
+  document.querySelectorAll('#sbParams [name^="p_"]').forEach(function(el) {
+    p[el.name.substring(2)] = el.value;
+  });
+  return p;
+}
+
+function sbGenerate() {
+  const lang = document.getElementById('sbLang').value;
+  const p = sbParams();
+  const mods = SB_MODULES[lang] || [];
+  let out = '';
+
+  if (lang === 'bash') {
+    out += '#!/usr/bin/env bash\nset -euo pipefail\n\n# Сгенерировано конструктором PayLater Monitor\n';
+  } else if (lang === 'powershell') {
+    out += '# Сгенерировано конструктором PayLater Monitor\n# Запуск: powershell -ExecutionPolicy Bypass -File script.ps1\n\n';
+  } else if (lang === 'ansible') {
+    out += '# Сгенерировано конструктором PayLater Monitor\n# Запуск: ansible-playbook -i inventory playbook.yml\n\n';
+  } else if (lang === 'terraform') {
+    out += '// Сгенерировано конструктором PayLater Monitor\n// Запуск: terraform init && terraform apply\n\n';
+  }
+
+  const selected = mods.filter(function(m) { return sbSelected[lang] && sbSelected[lang][m.id]; });
+  selected.forEach(function(m, i) {
+    out += (i > 0 ? '\n' : '') + '# === ' + m.name + ' ===\n' + m.tpl(p).trim() + '\n';
+  });
+
+  if (lang === 'terraform') {
+    out += '\n# === Floating IP ===\nresource "openstack_networking_floatingip_v2" "fip" {\n  pool = "public"\n}\n' +
+      'resource "openstack_networking_floatingip_associate_v2" "assoc" {\n  floating_ip = openstack_networking_floatingip_v2.fip.address\n  port_id = openstack_compute_instance_v2.vm.network[0].port\n}\n';
+  }
+  if (lang === 'bash' && selected.some(function(m){return m.id === 'b_docker';}) && !selected.some(function(m){return m.id === 'b_compose';})) {
+    out += '\n# === Docker compose (быстрый старт) ===\ncat > /etc/docker/compose/docker-compose.yml <<\'EOF\'\n' + (p.compose || 'services:\n  app:\n    image: nginx:latest\n    ports:\n      - "80:80"') + '\nEOF\ncd /etc/docker/compose && docker compose up -d\n';
+  }
+
+  document.getElementById('sbOutput').textContent = out.trim() + '\n';
+}
+
+function sbCopy() {
+  const out = document.getElementById('sbOutput').textContent;
+  if (!out) return;
+  navigator.clipboard.writeText(out).then(function(){ alert('Скрипт скопирован в буфер обмена'); });
+}
+
+function sbDownload() {
+  const out = document.getElementById('sbOutput').textContent;
+  if (!out) { alert('Сначала сгенерируйте скрипт'); return; }
+  const lang = document.getElementById('sbLang').value;
+  const ext = {bash:'sh', powershell:'ps1', ansible:'yml', terraform:'tf'}[lang] || 'txt';
+  const blob = new Blob([out], {type: 'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'paylater-script.' + ext;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('sbLang').addEventListener('change', sbRender);
+sbRender();
+sbGenerate();
+</script>
+{{end}}

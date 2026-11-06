@@ -1,0 +1,85 @@
+{{define "content"}}
+<h3>👥 Управление пользователями</h3>
+<p>Роли: <b>superadmin</b> — полный доступ, <b>admin</b> — настройка конфигурации, <b>user</b> — операции и просмотр.</p>
+
+<h4>Создать пользователя</h4>
+<form id="createUserForm" class="form-inline">
+  <input type="text" name="username" placeholder="Логин" class="input" required>
+  <input type="password" name="password" placeholder="Пароль (пусто = автогенерация)" class="input">
+  <select name="role" class="input">
+    <option value="user">user</option>
+    <option value="admin">admin</option>
+    <option value="superadmin">superadmin</option>
+  </select>
+  <button type="submit" class="btn btn-primary">Создать</button>
+</form>
+<div id="createResult" style="display:none"></div>
+
+<h4>Список пользователей</h4>
+<table class="table">
+  <thead><tr><th>Логин</th><th>Роль</th><th>Создан</th><th>Сменить пароль?</th><th>Действия</th></tr></thead>
+  <tbody>
+  {{range .Users}}
+    <tr>
+      <td>{{.Username}}{{if eq .Username $.CurrentUser}} <span class="badge badge-info">вы</span>{{end}}</td>
+      <td><span class="badge badge-{{if eq .Role "superadmin"}}danger{{else if eq .Role "admin"}}warning{{else}}info{{end}}">{{.Role}}</span></td>
+      <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+      <td>{{if .MustChangePassword}}⚠️ да{{else}}нет{{end}}</td>
+      <td>
+        {{if ne .Username $.CurrentUser}}
+        <button class="btn btn-sm btn-warning" onclick="resetPassword('{{.Username}}')">Сбросить пароль</button>
+        <button class="btn btn-sm btn-info" onclick="changeRole('{{.Username}}', '{{.Role}}')">Сменить роль</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteUser('{{.Username}}')">Удалить</button>
+        {{else}}
+        <span class="muted">—</span>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<script>
+document.getElementById('createUserForm')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.target;
+  postJSON('/api/users/create', {username: f.username.value, password: f.password.value, role: f.role.value}, r => {
+    const box = document.getElementById('createResult');
+    box.style.display = 'block';
+    if (r.success) {
+      box.innerHTML = '<div class="alert alert-success">✅ Создан. Пароль: <code>' + r.password + '</code></div>';
+      setTimeout(() => location.reload(), 3000);
+    } else {
+      box.innerHTML = '<div class="alert alert-danger">' + r.message + '</div>';
+    }
+  });
+});
+
+function resetPassword(username) {
+  if (!confirm('Сгенерировать новый пароль для ' + username + '?')) return;
+  postJSON('/api/users/reset-password', {username}, r => {
+    if (r.success) alert('Новый пароль для ' + username + ':\n' + r.password);
+    else alert('Ошибка: ' + r.message);
+    location.reload();
+  });
+}
+
+function changeRole(username, currentRole) {
+  const roles = ['user', 'admin', 'superadmin'];
+  const newRole = prompt('Новая роль для ' + username + ' (текущая: ' + currentRole + '):', currentRole);
+  if (!newRole || !roles.includes(newRole)) return;
+  postJSON('/api/users/role', {username, role: newRole}, r => {
+    alert(r.success ? 'OK' : 'Ошибка: ' + r.message);
+    location.reload();
+  });
+}
+
+function deleteUser(username) {
+  if (!confirm('Удалить пользователя ' + username + '?')) return;
+  postJSON('/api/users/delete', {username}, r => {
+    alert(r.success ? 'Удалён' : 'Ошибка: ' + r.message);
+    location.reload();
+  });
+}
+</script>
+{{end}}

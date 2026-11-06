@@ -1,0 +1,33 @@
+{{define "content"}}
+{{range .Hosts}}
+{{$host := .}}
+<h3>🐳 {{$host.Server}} <small>({{$host.IP}})</small></h3>
+{{if $host.Error}}
+<div class="alert alert-warning">⚠️ Контейнеры недоступны: {{$host.Error}}</div>
+{{else}}
+<table class="table">
+  <thead>
+    <tr><th>Имя</th><th>Image</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Действия</th></tr>
+  </thead>
+  <tbody>
+  {{range $host.Containers}}
+    <tr class="{{if not .Running}}row-critical{{end}}">
+      <td>{{.Name}}</td>
+      <td>{{.Image}}</td>
+      <td>{{if .Running}}<span class="badge badge-success">{{.Status}}</span>{{else}}<span class="badge badge-danger">{{.Status}}</span>{{end}}</td>
+      <td>{{printf "%.1f%%" .CpuPercent}}</td>
+      <td>{{printf "%.1f%%" .MemoryPercent}}</td>
+      <td>
+        <button class="btn btn-sm btn-primary" onclick="containerAction('{{$host.Server}}','{{.Name}}','restart')">Перезапустить</button>
+        <button class="btn btn-sm btn-success" onclick="containerAction('{{$host.Server}}','{{.Name}}','start')">Start</button>
+        <button class="btn btn-sm btn-danger" onclick="containerAction('{{$host.Server}}','{{.Name}}','stop')">Stop</button>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{else}}
+<div class="alert alert-info">Нет доступных серверов с контейнерами.</div>
+{{end}}
+{{end}}

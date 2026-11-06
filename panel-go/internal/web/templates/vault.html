@@ -1,0 +1,42 @@
+{{define "content"}}
+{{if .Connected}}
+<div class="alert alert-success">✅ Vault подключён. Версия: {{.Version}}</div>
+{{else}}
+<div class="alert alert-danger">❌ Vault не подключён: {{.Message}}</div>
+{{end}}
+
+{{if .Catalog}}
+<h3>📂 Каталог секретов</h3>
+{{if .Catalog.Kv1Paths}}
+<h4>KV v1</h4>
+<table class="table">
+  <thead><tr><th>Путь</th><th>Действия</th></tr></thead>
+  <tbody>
+  {{range .Catalog.Kv1Paths}}
+    <tr><td>{{.}}</td><td><button class="btn btn-sm btn-primary" onclick="vaultRead('{{.}}')">Читать</button></td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{if .Catalog.Kv2Paths}}
+<h4>KV v2</h4>
+<table class="table">
+  <thead><tr><th>Путь</th><th>Действия</th></tr></thead>
+  <tbody>
+  {{range .Catalog.Kv2Paths}}
+    <tr><td>{{.}}</td><td><button class="btn btn-sm btn-primary" onclick="vaultRead('{{.}}')">Читать</button></td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+{{else}}
+<div class="alert alert-info">Каталог пуст или недоступен.</div>
+{{end}}
+
+<h3>✏️ Создать/обновить секрет</h3>
+<form id="vaultWriteForm" class="form-inline">
+  <input type="text" name="path" placeholder="путь секрета" class="input" required>
+  <input type="text" name="data" placeholder='{"key":"value"}' class="input" style="width:40%">
+  <button type="submit" class="btn btn-primary">Записать</button>
+</form>
+{{end}}

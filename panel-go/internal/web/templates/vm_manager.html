@@ -1,0 +1,125 @@
+{{define "content"}}
+<h3>☁️ Управление виртуальными машинами</h3>
+
+<h4>🆕 Создать ВМ</h4>
+<form id="vmCreateForm" class="form">
+  <div class="grid grid-2">
+    <div>
+      <label>Имя ВМ <small>(оставьте пустым для автогенерации)</small>:</label>
+      <input type="text" name="name" class="input" placeholder="uz-test-app-1">
+      <button type="button" class="btn btn-sm" onclick="autoName()" style="margin:4px 0 8px;">✨ Сгенерировать имя</button>
+      <div>
+        <label>Окружение:</label>
+        <select name="env" class="input" id="vmEnv">
+          <option value="prod">PROD</option>
+          <option value="test">TEST</option>
+          <option value="stg">STAGING</option>
+        </select>
+        <label>Приложение (для имени):</label>
+        <input type="text" name="app" class="input" placeholder="app, db, ngx, camunda...">
+      </div>
+      <label>Шаблон ОС (Glance):</label>
+      <select name="template" class="input" id="vmTemplate">
+        {{range .GlanceImages}}<option value="{{.ID}}">{{.OperatingSystem}}{{if .Version}} ({{.Version}}){{end}} — {{.Name}}</option>{{end}}
+      </select>
+      <label>Пресет (тариф):</label>
+      <select name="preset" class="input" id="vmPreset" onchange="applyPreset()">
+        <option value="">— Вручную —</option>
+        {{range .Presets}}<option value="{{.ID}}" data-cpu="{{.Cpu}}" data-ram="{{.RamMb}}" data-disk="{{.DiskGb}}">{{.Name}} ({{.Cpu}} vCPU / {{.RamMb}} MB / {{.DiskGb}} GB)</option>{{end}}
+      </select>
+    </div>
+    <div>
+      <label>CPU (vCPU):</label>
+      <input type="number" name="cpu" class="input" id="vmCpu" min="1" max="64" value="2">
+      <label>RAM (MB):</label>
+      <input type="number" name="ram" class="input" id="vmRam" min="512" max="131072" value="4096">
+      <label>Disk (GB):</label>
+      <input type="number" name="disk" class="input" id="vmDisk" min="10" max="2048" value="50">
+      <label>Сеть:</label>
+      <select name="network" class="input">
+        <option value="">— По умолчанию —</option>
+        {{range .Networks}}<option value="{{.ID}}">{{.Name}}{{if .Status}} ({{.Status}}){{end}}</option>{{end}}
+      </select>
+      <label>Группа безопасности:</label>
+      <select name="security_group" class="input">
+        <option value="">— По умолчанию —</option>
+        {{range .SecurityGroups}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+      </select>
+      <label>SSH-ключ:</label>
+      <select name="key_pair" class="input">
+        <option value="">— По умолчанию —</option>
+        {{range .KeyPairs}}<option value="{{.Name}}">{{.Name}}{{if .Fingerprint}} ({{.Fingerprint}}){{end}}</option>{{end}}
+      </select>
+    </div>
+  </div>
+  <label>Комментарий:</label>
+  <input type="text" name="comment" class="input" placeholder="Назначение ВМ">
+  <button type="submit" class="btn btn-primary" style="margin-top:10px;">Создать ВМ</button>
+  <span id="vmCreateResult"></span>
+</form>
+
+<h4>🖥 Существующие ВМ</h4>
+<table class="table">
+  <thead><tr><th>Имя</th><th>ОС</th><th>IP</th><th>vCPU</th><th>RAM</th><th>Статус</th><th>Действия</th></tr></thead>
+  <tbody>
+  {{range .Servers}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.OperatingSystem}}</td>
+      <td>{{.IpAddress}}</td>
+      <td>{{if gt .CpuCores 0}}{{.CpuCores}}{{else}}—{{end}}</td>
+      <td>{{if gt .MemoryTotalGB 0}}{{.MemoryTotalGB}} GB{{else}}—{{end}}</td>
+      <td>{{if .IsAvailable}}<span class="badge badge-success">{{.Status}}</span>{{else}}<span class="badge badge-danger">{{.Status}}</span>{{end}}</td>
+      <td>
+        <button class="btn btn-sm btn-success" onclick="vmAction('{{.ID}}','start')">Start</button>
+        <button class="btn btn-sm btn-warning" onclick="vmAction('{{.ID}}','restart')">Restart</button>
+        <button class="btn btn-sm btn-danger" onclick="vmAction('{{.ID}}','stop')">Stop</button>
+        <button class="btn btn-sm btn-danger" onclick="vmAction('{{.ID}}','delete')">Delete</button>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<script>
+// Пункт 61: полноценная форма создания ВМ (Glance-образы, пресеты, сети).
+function applyPreset() {
+  const sel = document.getElementById('vmPreset');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.dataset.cpu) return;
+  document.getElementById('vmCpu').value = opt.dataset.cpu;
+  document.getElementById('vmRam').value = opt.dataset.ram;
+  document.getElementById('vmDisk').value = opt.dataset.disk;
+}
+
+function autoName() {
+  const env = document.getElementById('vmEnv').value;
+  const app = document.querySelector('input[name=app]').value || 'app';
+  postJSON('/api/servercore/vm-name', {env: env, app: app}, r => {
+    document.querySelector('input[name=name]').value = r.name || '';
+  });
+}
+
+document.getElementById('vmCreateForm')?.addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.target;
+  const payload = {
+    name: f.name.value,
+    template_id: f.template.value,
+    cpu: parseInt(f.cpu.value) || 2,
+    ram_mb: parseInt(f.ram.value) || 4096,
+    disk_gb: parseInt(f.disk.value) || 50,
+    network_id: f.network.value,
+    security_group_id: f.security_group.value,
+    key_pair_name: f.key_pair.value,
+    comment: f.comment.value
+  };
+  const box = document.getElementById('vmCreateResult');
+  box.textContent = '⏳ Создание ВМ...';
+  postJSON('/api/vm/create', payload, r => {
+    box.textContent = r.success ? '✅ ' + r.message : '❌ ' + r.message;
+    if (r.success) setTimeout(() => location.reload(), 1500);
+  });
+});
+</script>
+{{end}}

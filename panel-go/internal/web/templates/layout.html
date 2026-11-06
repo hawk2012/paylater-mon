@@ -1,0 +1,47 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — Paylater Monitor</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>📊 Paylater Monitor</h1>
+    </div>
+    <nav class="nav">
+      <a href="/" class="nav-item{{if eq .ActivePage "home"}} active{{end}}">🏠 Dashboard</a>
+      <a href="/servercore" class="nav-item{{if eq .ActivePage "servercore"}} active{{end}}">🖥 Серверы</a>
+      <a href="/containers" class="nav-item{{if eq .ActivePage "containers"}} active{{end}}">🐳 Контейнеры</a>
+      <a href="/containers/networks" class="nav-item{{if eq .ActivePage "networks"}} active{{end}}">🌐 Networks</a>
+      <a href="/graylog" class="nav-item{{if eq .ActivePage "graylog"}} active{{end}}">📓 Graylog</a>
+      <a href="/zeebe" class="nav-item{{if eq .ActivePage "zeebe"}} active{{end}}">⚙️ Zeebe</a>
+      <a href="/zeebe-processes" class="nav-item{{if eq .ActivePage "zeebe_processes"}} active{{end}}">📋 Процессы</a>
+      <a href="/vault" class="nav-item{{if eq .ActivePage "vault"}} active{{end}}">🔑 Vault</a>
+      <a href="/ai-diagnostics" class="nav-item{{if eq .ActivePage "ai_diagnostics"}} active{{end}}">🤖 AI-диагностика</a>
+      <a href="/ephemeral-access" class="nav-item{{if eq .ActivePage "ephemeral"}} active{{end}}">⏱ Эфемерный доступ</a>
+      <a href="/vm-manager" class="nav-item{{if eq .ActivePage "vm_manager"}} active{{end}}">☁️ Управление ВМ</a>
+      <a href="/script-builder" class="nav-item{{if eq .ActivePage "script_builder"}} active{{end}}">🛠 Конструктор скриптов</a>
+      <a href="/system" class="nav-item{{if eq .ActivePage "system"}} active{{end}}">⚙️ Система</a>
+      <a href="/tls" class="nav-item{{if eq .ActivePage "tls"}} active{{end}}">🔒 TLS</a>
+      <a href="/staging-tls" class="nav-item{{if eq .ActivePage "staging_tls"}} active{{end}}">🧪 Staging-TLS</a>
+      <a href="/logs" class="nav-item{{if eq .ActivePage "logs"}} active{{end}}">📜 Логи</a>
+      <a href="/users" class="nav-item{{if eq .ActivePage "users"}} active{{end}}">👥 Пользователи</a>
+      <a href="/help" class="nav-item{{if eq .ActivePage "help"}} active{{end}}">❓ Помощь</a>
+    </nav>
+  </aside>
+  <main class="content">
+    <header class="content-header">
+      <h2>{{.Title}}</h2>
+    </header>
+    <div class="content-body">
+      {{template "content" .}}
+    </div>
+  </main>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>{{end}}
